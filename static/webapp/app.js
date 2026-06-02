@@ -548,14 +548,10 @@ function paintSilentWheel(roster) {
   const labels = roster
     .map((p, i) => {
       const angDeg = (i + 0.5) * step - 90;
-      const ang = (angDeg * Math.PI) / 180;
-      const radius = 26;
-      const x = 50 + Math.cos(ang) * radius;
-      const y = 50 + Math.sin(ang) * radius;
       let textRotate = angDeg;
       if (textRotate > 90) textRotate -= 180;
       if (textRotate < -90) textRotate += 180;
-      return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(
+      return `<div class="silent-wheel-label" style="transform: translate(-50%, -50%) rotate(${angDeg}deg) translateX(31%) rotate(${textRotate}deg);">${escapeHtml(
         p.nick
       )}</div>`;
     })
