@@ -615,6 +615,13 @@ function renderHome(roleName) {
       <div class="muted" style="margin-top:8px">
         Используйте вкладки для управления участниками, запуском колеса, историей и шаблонами сообщений.
       </div>
+      <div class="card" style="margin-top:12px">
+        <div><strong>Проверка чата</strong></div>
+        <p class="muted" style="margin:8px 0">
+          Быстрый тест: отправить сообщение в рабочий чат бота.
+        </p>
+        <button id="admin-test-chat-home" type="button">Тестовое сообщение в чат</button>
+      </div>
     `;
     return;
   }
@@ -1068,20 +1075,22 @@ async function boot() {
     });
   }
 
-  const adminTestChat = $("#admin-test-chat");
-  if (adminTestChat) {
-    adminTestChat.addEventListener("click", async () => {
-      adminTestChat.disabled = true;
+  const bindAdminTestChatButton = (btn) => {
+    if (!btn) return;
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
       try {
         const res = await api("/api/admin/test-chat", { method: "POST" });
         tgAlert(`Тестовое сообщение отправлено в чат ${res.chat_id}.`);
       } catch (err) {
         tgAlert(String(err && err.message ? err.message : err));
       } finally {
-        adminTestChat.disabled = false;
+        btn.disabled = false;
       }
     });
-  }
+  };
+  bindAdminTestChatButton($("#admin-test-chat"));
+  bindAdminTestChatButton($("#admin-test-chat-home"));
 
   const adminForm = $("#admin-form");
   if (adminForm) {
