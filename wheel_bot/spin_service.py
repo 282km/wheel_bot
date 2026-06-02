@@ -272,6 +272,19 @@ async def send_silent_announce(
     selected_ids: list[int],
     prizes: list[float],
 ) -> dict[str, Any]:
+    open_sess = await db.get_open_silent_session(conn, stats_chat_id)
+    if open_sess:
+        pending_id = int(open_sess["id"])
+        if open_sess["has_winners"]:
+            raise ValueError(
+                f"Сначала отправьте результаты колеса #{pending_id}. "
+                "Новый анонс можно только после завершения текущего."
+            )
+        raise ValueError(
+            f"Уже есть колесо #{pending_id} после анонса (ещё не крутили). "
+            "Сначала крутите, отмените его или завершите текущий цикл."
+        )
+
     roster_ids, roster_rows, templates, depositor_label, prize_pool = await _prepare_spin_data(
         conn, admin_telegram_id, depositor_id, deposit_amount, selected_ids, prizes
     )

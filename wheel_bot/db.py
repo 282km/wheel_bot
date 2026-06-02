@@ -382,6 +382,32 @@ async def list_wheel_history(conn: aiosqlite.Connection, chat_id: int, limit: in
     return out
 
 
+async def get_open_silent_session(conn: aiosqlite.Connection, chat_id: int) -> Optional[dict[str, Any]]:
+    """
+    Незавершённое тихое колесо: results_sent=0.
+    has_winners=True — уже крутили, ждут «отправить результаты».
+    """
+    row = await (
+        await conn.execute(
+            """
+            SELECT s.id,
+                   (SELECT COUNT(*) FROM wheel_spins w WHERE w.session_id = s.id) AS spin_count
+            FROM wheel_sessions s
+            WHERE s.chat_id = ? AND s.mode = 'silent' AND s.results_sent = 0
+            ORDER BY s.id DESC
+            LIMIT 1
+            """,
+            (int(chat_id),),
+        )
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": int(row["id"]),
+        "has_winners": int(row["spin_count"]) > 0,
+    }
+
+
 async def get_wheel_session(conn: aiosqlite.Connection, session_id: int) -> Optional[dict[str, Any]]:
     row = await (
         await conn.execute(

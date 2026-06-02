@@ -882,10 +882,23 @@ async function reloadParticipants() {
   ensureAddFormReady();
 }
 
+function applySilentFlowFromServer(silentFlow) {
+  if (silentFlow && silentFlow.session_id) {
+    const sid = Number(silentFlow.session_id);
+    silentAnnounceSessionId = sid || null;
+    silentSpunSessionId = silentFlow.phase === "spun" ? sid : null;
+  } else {
+    silentAnnounceSessionId = null;
+    silentSpunSessionId = null;
+  }
+  updateSilentSessionStatus();
+}
+
 async function reloadDraftUi() {
   const data = await api("/api/wheel/draft");
   participants = data.participants || [];
   selectedIds = data.selected_ids || [];
+  applySilentFlowFromServer(data.silent_flow);
   renderPoolAndPicked();
   ensureAddFormReady();
 }

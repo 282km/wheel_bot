@@ -48,6 +48,19 @@ def _role_rank(role: str) -> int:
     return {"user": 0, "admin": 1, "superadmin": 2}.get(role, -1)
 
 
+async def _silent_flow_payload(conn, stats_chat_id: int) -> dict[str, object] | None:
+    getter = getattr(db, "get_open_silent_session", None)
+    if getter is None:
+        return None
+    open_silent = await getter(conn, stats_chat_id)
+    if not open_silent:
+        return None
+    return {
+        "session_id": int(open_silent["id"]),
+        "phase": "spun" if open_silent["has_winners"] else "announced",
+    }
+
+
 async def _auth(request: Request, settings: Settings) -> dict[str, Any]:
     auth = request.headers.get("authorization", "")
     if not auth.lower().startswith("bearer "):
@@ -185,13 +198,7 @@ def create_app(
             selected = [pid for pid in selected if pid in visible_ids]
             last = [pid for pid in last if pid in visible_ids]
             stats_chat_id = await get_effective_stats_chat_id(conn, settings)
-            open_silent = await db.get_open_silent_session(conn, stats_chat_id)
-            silent_flow = None
-            if open_silent:
-                silent_flow = {
-                    "session_id": int(open_silent["id"]),
-                    "phase": "spun" if open_silent["has_winners"] else "announced",
-                }
+            silent_flow = await _silent_flow_payload(conn, stats_chat_id)
             return JSONResponse(
                 {
                     "selected_ids": selected,
