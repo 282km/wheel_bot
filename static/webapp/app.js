@@ -142,10 +142,17 @@ function buildSilentSegments(roster) {
   });
 }
 
+const SILENT_WHEEL_MAX_PX = 560;
+const SILENT_WHEEL_VW = 0.92;
+
 function silentCanvasCssSize() {
-  const wrap = $(".silent-wheel-wrap");
-  const w = wrap ? wrap.clientWidth : 680;
-  return Math.max(280, Math.min(680, w));
+  const canvas = $("#silent-wheel-canvas");
+  if (canvas) {
+    const w = canvas.getBoundingClientRect().width;
+    if (w > 20) return Math.round(w);
+  }
+  const vw = window.visualViewport?.width || window.innerWidth || SILENT_WHEEL_MAX_PX;
+  return Math.round(Math.min(SILENT_WHEEL_MAX_PX, Math.max(280, vw * SILENT_WHEEL_VW)));
 }
 
 function ensureSilentCanvas() {
@@ -157,8 +164,6 @@ function ensureSilentCanvas() {
   if (canvas.width !== px || canvas.height !== px) {
     canvas.width = px;
     canvas.height = px;
-    canvas.style.width = `${css}px`;
-    canvas.style.height = `${css}px`;
   }
   return canvas;
 }
@@ -167,13 +172,21 @@ function hslFromHue(h) {
   return `hsl(${Number(h || 0)}, 62%, 48%)`;
 }
 
-function fitCanvasLabel(ctx, text, maxWidth) {
-  if (ctx.measureText(text).width <= maxWidth) return text;
-  let t = text;
-  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxWidth) {
-    t = t.slice(0, -1);
+function prepareCanvasLabel(ctx, nick, maxWidth, maxFont, minFont) {
+  const raw = String(nick || "").trim();
+  let size = maxFont;
+  while (size >= minFont) {
+    ctx.font = `600 ${size}px system-ui, sans-serif`;
+    if (ctx.measureText(raw).width <= maxWidth) return { text: raw, size };
+    size -= 1;
   }
-  return `${t}…`;
+  ctx.font = `600 ${minFont}px system-ui, sans-serif`;
+  let text = raw;
+  if (ctx.measureText(text).width <= maxWidth) return { text, size: minFont };
+  while (text.length > 1 && ctx.measureText(`${text}…`).width > maxWidth) {
+    text = text.slice(0, -1);
+  }
+  return { text: `${text}…`, size: minFont };
 }
 
 function setSilentWheelRotation(deg, animate) {
@@ -209,12 +222,12 @@ function drawSilentWheelCanvas(roster) {
   const n = roster.length;
   const cx = css / 2;
   const cy = css / 2;
-  const pad = Math.max(10, css * 0.04);
+  const pad = Math.max(8, css * 0.03);
   const outerR = css / 2 - pad;
   const step = (Math.PI * 2) / n;
-  const labelR = outerR * 0.63;
-  const fontSize = Math.max(9, Math.min(14, Math.round(css / (n >= 12 ? 34 : 30))));
-  ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+  const labelR = outerR * 0.6;
+  const maxFont = Math.max(10, Math.min(17, Math.round(css / (7 + n * 0.45))));
+  const minFont = Math.max(8, maxFont - 6);
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
 
@@ -239,8 +252,15 @@ function drawSilentWheelCanvas(roster) {
     const mid = start + step / 2;
     const lx = cx + labelR * Math.cos(mid);
     const ly = cy + labelR * Math.sin(mid);
-    const maxW = 2 * labelR * Math.sin(step / 2) * 0.96;
-    const label = fitCanvasLabel(ctx, String(roster[i].nick || ""), maxW);
+    const maxW = 2 * labelR * Math.sin(step / 2) * 0.98;
+    const { text: label, size: fontSize } = prepareCanvasLabel(
+      ctx,
+      roster[i].nick,
+      maxW,
+      maxFont,
+      minFont
+    );
+    ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
 
     ctx.save();
     ctx.beginPath();
@@ -515,6 +535,9 @@ function setTab(name) {
   }
   if (name === "templates") {
     reloadTemplates().catch((e) => tgAlert(String(e && e.message ? e.message : e)));
+  }
+  if (name === "wheel_silent") {
+    requestAnimationFrame(() => paintSilentWheel(silentCurrentSegments));
   }
 }
 
@@ -1003,6 +1026,14 @@ async function boot() {
     await api("/api/message-templates/reset", { method: "POST" });
     await reloadTemplates();
     tgAlert("Стандартные шаблоны восстановлены.");
+  });
+
+  let silentResizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(silentResizeTimer);
+    silentResizeTimer = setTimeout(() => {
+      paintSilentWheel(silentCurrentSegments);
+    }, 120);
   });
 
   await reloadParticipants();
