@@ -234,80 +234,31 @@ function setSilentWheelRotation(deg, animate) {
   canvas.style.transform = `rotate(${deg}deg)`;
 }
 
-function wrapNickLines(ctx, nick, maxWidth, maxLines) {
+function fitSingleLineNick(ctx, nick, maxWidth, maxFont, minFont) {
   const raw = String(nick || "").trim();
-  if (!raw) return [""];
-  const words = raw.split(/\s+/).filter(Boolean);
-  const lines = [];
-  let current = "";
-
-  const pushLine = (line) => {
-    if (!line) return;
-    lines.push(line);
-    current = "";
-  };
-
-  const splitLongWord = (word) => {
-    let chunk = "";
-    for (const ch of word) {
-      const next = chunk + ch;
-      if (!chunk || ctx.measureText(next).width <= maxWidth) {
-        chunk = next;
-      } else {
-        pushLine(chunk);
-        chunk = ch;
-        if (lines.length >= maxLines) return;
-      }
-    }
-    current = chunk;
-  };
-
-  for (const word of words) {
-    if (lines.length >= maxLines) break;
-    const candidate = current ? `${current} ${word}` : word;
-    if (ctx.measureText(candidate).width <= maxWidth) {
-      current = candidate;
-      continue;
-    }
-    if (current) {
-      pushLine(current);
-      if (lines.length >= maxLines) break;
-    }
-    if (ctx.measureText(word).width <= maxWidth) {
-      current = word;
-    } else {
-      splitLongWord(word);
-    }
-  }
-  if (current && lines.length < maxLines) lines.push(current);
-  return lines.length ? lines.slice(0, maxLines) : [raw.slice(0, Math.max(1, Math.floor(maxWidth / 7)))];
-}
-
-function fitNickLabel(ctx, nick, maxWidth, maxHeight, maxFont, minFont) {
+  if (!raw) return { text: "", size: minFont };
   for (let size = maxFont; size >= minFont; size -= 1) {
     ctx.font = `600 ${size}px system-ui, sans-serif`;
-    const lineHeight = size * 1.1;
-    const maxLines = Math.max(1, Math.floor(maxHeight / lineHeight));
-    const lines = wrapNickLines(ctx, nick, maxWidth, maxLines);
-    const blockH = lines.length * lineHeight;
-    const fits = blockH <= maxHeight && lines.every((ln) => ctx.measureText(ln).width <= maxWidth);
-    if (fits) return { lines, size, lineHeight };
+    if (ctx.measureText(raw).width <= maxWidth) {
+      return { text: raw, size };
+    }
   }
   ctx.font = `600 ${minFont}px system-ui, sans-serif`;
-  const lineHeight = minFont * 1.1;
-  const maxLines = Math.max(1, Math.floor(maxHeight / lineHeight));
-  return { lines: wrapNickLines(ctx, nick, maxWidth, maxLines), size: minFont, lineHeight };
+  let text = raw;
+  if (ctx.measureText(text).width <= maxWidth) {
+    return { text, size: minFont };
+  }
+  while (text.length > 1 && ctx.measureText(`${text}…`).width > maxWidth) {
+    text = text.slice(0, -1);
+  }
+  return { text: `${text}…`, size: minFont };
 }
 
-function drawSilentSectorNick(ctx, nick, maxWidth, maxHeight, maxFont, minFont) {
-  const { lines, size, lineHeight } = fitNickLabel(ctx, nick, maxWidth, maxHeight, maxFont, minFont);
+function drawSilentSectorNick(ctx, nick, maxWidth, maxFont, minFont) {
+  const { text, size } = fitSingleLineNick(ctx, nick, maxWidth, maxFont, minFont);
   ctx.font = `600 ${size}px system-ui, sans-serif`;
-  let y = -((lines.length - 1) * lineHeight) / 2;
-  for (const line of lines) {
-    ctx.strokeText(line, 0, y);
-    ctx.fillText(line, 0, y);
-    y += lineHeight;
-  }
+  ctx.strokeText(text, 0, 0);
+  ctx.fillText(text, 0, 0);
 }
 
 function drawSilentWheelCanvas(roster) {
@@ -343,8 +294,8 @@ function drawSilentWheelCanvas(roster) {
   const step = (Math.PI * 2) / n;
   const labelR = (outerR + hubR) / 2;
   const bandH = outerR - hubR;
-  const maxFont = Math.max(9, Math.min(16, Math.round(bandH * 0.34)));
-  const minFont = Math.max(7, maxFont - 5);
+  const maxFont = Math.max(8, Math.min(13, Math.round(bandH * 0.3)));
+  const minFont = n > 18 ? 6 : n > 12 ? 7 : 8;
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
 
@@ -378,8 +329,7 @@ function drawSilentWheelCanvas(roster) {
     const lx = cx + labelR * Math.cos(mid);
     const ly = cy + labelR * Math.sin(mid);
     const nick = String(roster[i].nick || "").trim();
-    const maxW = 2 * labelR * Math.sin(step / 2) * 0.94;
-    const maxH = bandH * 0.9;
+    const maxW = 2 * labelR * Math.sin(step / 2) * 0.96;
 
     ctx.save();
     ctx.beginPath();
@@ -397,7 +347,7 @@ function drawSilentWheelCanvas(roster) {
     ctx.lineJoin = "round";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    drawSilentSectorNick(ctx, nick, maxW, maxH, maxFont, minFont);
+    drawSilentSectorNick(ctx, nick, maxW, maxFont, minFont);
     ctx.restore();
   }
 }

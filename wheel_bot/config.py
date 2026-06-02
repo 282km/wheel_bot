@@ -58,8 +58,14 @@ def load_settings() -> Settings:
 
     chat_raw = os.getenv("TARGET_CHAT_ID", "").strip()
     if not chat_raw:
-        raise RuntimeError("TARGET_CHAT_ID is required")
-    target_chat_id = int(chat_raw)
+        raise RuntimeError(
+            f"TARGET_CHAT_ID is required in {_PROJECT_ROOT / '.env'} "
+            "(пустое значение или переменная не задана)"
+        )
+    try:
+        target_chat_id = int(chat_raw)
+    except ValueError as e:
+        raise RuntimeError(f"TARGET_CHAT_ID must be an integer, got: {chat_raw!r}") from e
 
     session_secret = os.getenv("SESSION_SECRET", "").strip()
     if len(session_secret) < 16:
