@@ -12,6 +12,7 @@ let historyItemsCache = [];
 let wiredDndZones = new WeakSet();
 let silentSpinRunning = false;
 let silentCurrentSessionId = null;
+let silentCurrentSegments = [];
 
 function getTg() {
   return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -128,6 +129,18 @@ function wheelPaletteByHue(h) {
   return `hsl(${Number(h || 0)}, 70%, 48%)`;
 }
 
+function buildSilentSegments(roster) {
+  const src = Array.isArray(roster) ? roster : [];
+  return src.map((p, idx) => {
+    const hue = (idx * 360) / Math.max(1, src.length);
+    return {
+      ...p,
+      hue,
+      color: wheelPaletteByHue(hue),
+    };
+  });
+}
+
 function renderParticipants() {
   const root = $("#plist");
   root.innerHTML = "";
@@ -230,18 +243,16 @@ function renderPoolAndPicked() {
     .map((id, idx) => {
       const p = participants.find((x) => x.id === id);
       if (!p) return null;
-      const hue = (idx * 360) / Math.max(1, selectedIds.length);
       return {
         id: p.id,
         nick: p.poker_nick,
         description: p.description || "",
-        hue,
-        color: wheelPaletteByHue(hue),
       };
     })
     .filter(Boolean);
-  paintSilentWheel(rosterPreview);
-  renderSilentRosterList(rosterPreview);
+  silentCurrentSegments = buildSilentSegments(rosterPreview);
+  paintSilentWheel(silentCurrentSegments);
+  renderSilentRosterList(silentCurrentSegments);
 }
 
 function renderWheelRoster(poolSel, pickedSel, depositorSel) {
@@ -548,10 +559,14 @@ function paintSilentWheel(roster) {
   const labels = roster
     .map((p, i) => {
       const angDeg = (i + 0.5) * step - 90;
-      let textRotate = angDeg;
+      const ang = (angDeg * Math.PI) / 180;
+      const radius = 31;
+      const x = 50 + Math.cos(ang) * radius;
+      const y = 50 + Math.sin(ang) * radius;
+      let textRotate = angDeg + 90;
       if (textRotate > 90) textRotate -= 180;
       if (textRotate < -90) textRotate += 180;
-      return `<div class="silent-wheel-label" style="transform: translate(-50%, -50%) rotate(${angDeg}deg) translateX(31%) rotate(${textRotate}deg);">${escapeHtml(
+      return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(
         p.nick
       )}</div>`;
     })
@@ -565,14 +580,8 @@ async function animateSilentRound(round) {
   const winnerLine = $("#silent-wheel-winner");
   if (!disc || !winnerLine) return;
   const baseRoster = round.roster || [];
-  const roster = baseRoster.map((p, idx) => {
-    const hue = (idx * 360) / Math.max(1, baseRoster.length);
-    return {
-      ...p,
-      hue,
-      color: wheelPaletteByHue(hue),
-    };
-  });
+  const roster = buildSilentSegments(baseRoster);
+  silentCurrentSegments = roster;
   const winnerIdx = roster.findIndex((x) => Number(x.id) === Number(round.winner_id));
   if (!roster.length || winnerIdx < 0) return;
   paintSilentWheel(roster);

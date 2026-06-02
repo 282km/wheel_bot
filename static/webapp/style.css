@@ -242,8 +242,6 @@ footer {
 
 .silent-wheel-label {
   position: absolute;
-  left: 50%;
-  top: 50%;
   font-size: clamp(9px, 2.1vw, 11px);
   line-height: 1.05;
   font-weight: 600;
@@ -255,7 +253,6 @@ footer {
   text-overflow: ellipsis;
   text-align: center;
   pointer-events: none;
-  transform-origin: center center;
 }
 
 .silent-wheel-winner {
