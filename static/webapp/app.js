@@ -149,6 +149,14 @@ function resetSilentColorMap(ids) {
   });
 }
 
+function silentColorForParticipantId(id) {
+  const key = String(Number(id));
+  if (!silentColorById.has(key)) {
+    hueForSilentId(id, silentColorById.size, Math.max(1, silentColorById.size + 1));
+  }
+  return wheelPaletteByHue(silentColorById.get(key) ?? 0);
+}
+
 function buildSilentSegments(roster) {
   const src = Array.isArray(roster) ? roster : [];
   return src.map((p, idx) => {
@@ -166,11 +174,24 @@ function renderSilentLegend(roster) {
   if (!root) return;
   root.innerHTML = "";
   const src = Array.isArray(roster) ? roster : [];
-  if (!src.length) return;
+  if (!src.length) {
+    for (const id of selectedIds) {
+      const p = participants.find((x) => x.id === id);
+      if (!p) continue;
+      const row = document.createElement("div");
+      row.className = "silent-legend-item";
+      const color = silentColorForParticipantId(id);
+      row.innerHTML = `<span class="silent-dot" style="background:${color}"></span><span>${escapeHtml(
+        p.poker_nick || ""
+      )}</span>`;
+      root.appendChild(row);
+    }
+    return;
+  }
   for (const p of src) {
     const row = document.createElement("div");
     row.className = "silent-legend-item";
-    const color = p.color || wheelPaletteByHue(p.hue);
+    const color = p.color || silentColorForParticipantId(p.id);
     row.innerHTML = `<span class="silent-dot" style="background:${color}"></span><span>${escapeHtml(p.nick || "")}</span>`;
     root.appendChild(row);
   }
@@ -696,8 +717,7 @@ function renderSilentResults(items) {
   for (const it of items) {
     const div = document.createElement("div");
     div.className = "silent-winner-card";
-    const winnerSeg = silentCurrentSegments.find((x) => Number(x.id) === Number(it.winner_id));
-    const color = winnerSeg?.color || wheelPaletteByHue(winnerSeg?.hue || 0);
+    const color = silentColorForParticipantId(it.winner_id);
     div.innerHTML = `<strong>${it.round}. <span class="silent-dot" style="background:${color}"></span> ${escapeHtml(
       it.winner_nick
     )}</strong> <small>— ${fmtMoney(it.prize)}</small>`;
@@ -738,8 +758,7 @@ async function animateSilentRound(round) {
 
   winnerLine.textContent = `Раунд ${round.round}: крутится...`;
   await sleep(5000);
-  const winner = roster[winnerIdx];
-  const winnerColor = winner?.color || wheelPaletteByHue(winner?.hue || 0);
+  const winnerColor = silentColorForParticipantId(round.winner_id);
   winnerLine.innerHTML = `Раунд ${round.round}: <strong><span class="silent-dot" style="background:${winnerColor}"></span> ${escapeHtml(
     round.winner_nick
   )}</strong> — ${fmtMoney(
@@ -983,6 +1002,7 @@ async function boot() {
           await animateSilentRound(round);
         }
         renderSilentResults(rounds);
+        renderSilentLegend([]);
         silentCurrentSessionId = Number(res.session_id || 0) || null;
         if (winnerLine) winnerLine.textContent = "Кручение завершено. Проверьте победителей и отправьте результаты в чат.";
         if (sendBtn) sendBtn.disabled = !silentCurrentSessionId;
