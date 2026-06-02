@@ -231,6 +231,31 @@ footer {
   font-size: 16px;
 }
 
+.silent-wheel-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  justify-content: center;
+  margin: 2px 0 10px;
+}
+
+.silent-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #cfd6e8;
+  font-size: 13px;
+}
+
+.silent-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  vertical-align: middle;
+}
+
 .silent-winner-card {
   border: 1px solid #3a3f52;
   border-radius: 10px;

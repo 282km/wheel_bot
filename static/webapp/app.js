@@ -14,6 +14,7 @@ let silentSpinRunning = false;
 let silentCurrentSessionId = null;
 let silentCurrentSegments = [];
 let silentWheelRotationDeg = 0;
+let silentColorById = new Map();
 
 function getTg() {
   return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -130,16 +131,49 @@ function wheelPaletteByHue(h) {
   return `hsl(${Number(h || 0)}, 70%, 48%)`;
 }
 
+function hueForSilentId(id, fallbackIdx, total) {
+  const key = String(Number(id));
+  if (silentColorById.has(key)) return silentColorById.get(key);
+  const idx = Number.isFinite(fallbackIdx) ? fallbackIdx : silentColorById.size;
+  const base = (idx * 360) / Math.max(1, total || 1);
+  silentColorById.set(key, base);
+  return base;
+}
+
+function resetSilentColorMap(ids) {
+  silentColorById = new Map();
+  const src = Array.isArray(ids) ? ids : [];
+  const total = Math.max(1, src.length);
+  src.forEach((id, idx) => {
+    silentColorById.set(String(Number(id)), (idx * 360) / total);
+  });
+}
+
 function buildSilentSegments(roster) {
   const src = Array.isArray(roster) ? roster : [];
   return src.map((p, idx) => {
-    const hue = (idx * 360) / Math.max(1, src.length);
+    const hue = hueForSilentId(p.id, idx, src.length);
     return {
       ...p,
       hue,
       color: wheelPaletteByHue(hue),
     };
   });
+}
+
+function renderSilentLegend(roster) {
+  const root = $("#silent-wheel-legend");
+  if (!root) return;
+  root.innerHTML = "";
+  const src = Array.isArray(roster) ? roster : [];
+  if (!src.length) return;
+  for (const p of src) {
+    const row = document.createElement("div");
+    row.className = "silent-legend-item";
+    const color = p.color || wheelPaletteByHue(p.hue);
+    row.innerHTML = `<span class="silent-dot" style="background:${color}"></span><span>${escapeHtml(p.nick || "")}</span>`;
+    root.appendChild(row);
+  }
 }
 
 const SILENT_WHEEL_MAX_PX = 560;
@@ -380,6 +414,7 @@ function escapeHtml(s) {
 function renderPoolAndPicked() {
   renderWheelRoster("#pool", "#picked", "#depositor");
   renderWheelRoster("#pool-silent", "#picked-silent", "#depositor-silent");
+  resetSilentColorMap(selectedIds);
   const rosterPreview = selectedIds
     .map((id, idx) => {
       const p = participants.find((x) => x.id === id);
@@ -661,7 +696,11 @@ function renderSilentResults(items) {
   for (const it of items) {
     const div = document.createElement("div");
     div.className = "silent-winner-card";
-    div.innerHTML = `<strong>${it.round}. ${escapeHtml(it.winner_nick)}</strong> <small>— ${fmtMoney(it.prize)}</small>`;
+    const winnerSeg = silentCurrentSegments.find((x) => Number(x.id) === Number(it.winner_id));
+    const color = winnerSeg?.color || wheelPaletteByHue(winnerSeg?.hue || 0);
+    div.innerHTML = `<strong>${it.round}. <span class="silent-dot" style="background:${color}"></span> ${escapeHtml(
+      it.winner_nick
+    )}</strong> <small>— ${fmtMoney(it.prize)}</small>`;
     root.appendChild(div);
   }
 }
@@ -669,6 +708,7 @@ function renderSilentResults(items) {
 function paintSilentWheel(roster) {
   silentWheelRotationDeg = 0;
   drawSilentWheelCanvas(roster);
+  renderSilentLegend(roster);
   const canvas = $("#silent-wheel-canvas");
   if (canvas) {
     setSilentWheelRotation(0, false);
@@ -698,7 +738,11 @@ async function animateSilentRound(round) {
 
   winnerLine.textContent = `Раунд ${round.round}: крутится...`;
   await sleep(5000);
-  winnerLine.innerHTML = `Раунд ${round.round}: <strong>${escapeHtml(round.winner_nick)}</strong> — ${fmtMoney(
+  const winner = roster[winnerIdx];
+  const winnerColor = winner?.color || wheelPaletteByHue(winner?.hue || 0);
+  winnerLine.innerHTML = `Раунд ${round.round}: <strong><span class="silent-dot" style="background:${winnerColor}"></span> ${escapeHtml(
+    round.winner_nick
+  )}</strong> — ${fmtMoney(
     round.prize
   )}`;
   await sleep(5000);
@@ -920,6 +964,7 @@ async function boot() {
       const sendBtn = $("#silent-send-results");
       log.textContent = "Готовим локальное колесо...";
       if (sendBtn) sendBtn.disabled = true;
+      resetSilentColorMap(selectedIds);
       silentSpinRunning = true;
       renderSilentResults([]);
       try {
