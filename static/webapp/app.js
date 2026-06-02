@@ -540,10 +540,12 @@ function paintSilentWheel(roster) {
   }
   const labels = roster
     .map((p, i) => {
-      const ang = (i + 0.5) * step;
-      return `<div class="silent-wheel-label" style="transform: rotate(${ang}deg) translateY(-41%) rotate(${-ang}deg);">${escapeHtml(
-        p.nick
-      )}</div>`;
+      const angDeg = (i + 0.5) * step - 90;
+      const ang = (angDeg * Math.PI) / 180;
+      const radius = 33;
+      const x = 50 + Math.cos(ang) * radius;
+      const y = 50 + Math.sin(ang) * radius;
+      return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;">${escapeHtml(p.nick)}</div>`;
     })
     .join("");
   disc.innerHTML = `<div class="silent-wheel-labels">${labels}</div>`;
