@@ -165,21 +165,33 @@ async def run_wheel_spin_silent(
     deposit_amount: float,
     selected_ids: list[int],
     prizes: list[float],
+    session_id: int | None = None,
 ) -> dict[str, Any]:
     roster_ids, roster_rows, templates, depositor_label, prize_pool = await _prepare_spin_data(
         conn, admin_telegram_id, depositor_id, deposit_amount, selected_ids, prizes
     )
     db_roster = [(pid, idx, roster_rows[idx][3]) for idx, pid in enumerate(roster_ids)]
-    sid = await db.create_wheel_session(
-        conn,
-        chat_id=chat_id,
-        depositor_id=depositor_id,
-        deposit_amount=float(deposit_amount),
-        created_by=admin_telegram_id,
-        roster=db_roster,
-        mode="silent",
-        results_sent=False,
-    )
+    if session_id is None:
+        sid = await db.create_wheel_session(
+            conn,
+            chat_id=chat_id,
+            depositor_id=depositor_id,
+            deposit_amount=float(deposit_amount),
+            created_by=admin_telegram_id,
+            roster=db_roster,
+            mode="silent",
+            results_sent=False,
+        )
+    else:
+        session = await db.get_wheel_session(conn, int(session_id))
+        if not session or int(session["chat_id"]) != int(chat_id):
+            raise ValueError("Колесо не найдено")
+        if str(session["mode"]) != "silent":
+            raise ValueError("Это колесо не в режиме тишины")
+        existing = await db.list_session_winners(conn, int(session_id))
+        if existing:
+            raise ValueError("Для этого колеса уже есть результаты")
+        sid = int(session_id)
 
     remaining_rows = roster_rows.copy()
     rounds: list[dict[str, Any]] = []
@@ -218,13 +230,26 @@ async def send_silent_announce(
     selected_ids: list[int],
     prizes: list[float],
 ) -> dict[str, Any]:
-    _roster_ids, roster_rows, templates, depositor_label, prize_pool = await _prepare_spin_data(
+    roster_ids, roster_rows, templates, depositor_label, prize_pool = await _prepare_spin_data(
         conn, admin_telegram_id, depositor_id, deposit_amount, selected_ids, prizes
     )
+    db_roster = [(pid, idx, roster_rows[idx][3]) for idx, pid in enumerate(roster_ids)]
+    sid = await db.create_wheel_session(
+        conn,
+        chat_id=chat_id,
+        depositor_id=depositor_id,
+        deposit_amount=float(deposit_amount),
+        created_by=admin_telegram_id,
+        roster=db_roster,
+        mode="silent",
+        results_sent=False,
+    )
+    await db.set_last_roster_ids(conn, roster_ids)
+    await db.set_draft_ids(conn, roster_ids)
     prize_lines = [f"{idx}. ${float(prize):g}" for idx, prize in enumerate(prizes, start=1)]
     announce_text = _fmt_template(
         templates["announce"],
-        wheel_id="(режим тишины)",
+        wheel_id=sid,
         depositor=depositor_label,
         deposit_amount=f"{float(deposit_amount):g}",
         prize_pool=f"{prize_pool:g}",
@@ -238,10 +263,10 @@ async def send_silent_announce(
         f"{announce_text}\n\n"
         f"👥 Участники текущего колеса:\n"
         f"{chr(10).join(members_lines)}\n\n"
-        f"🤫 Режим тишины: кручение проходит в WebApp."
+        f"🤫 Тишина в чате"
     )
     await bot.send_message(chat_id, text)
-    return {"ok": True}
+    return {"ok": True, "session_id": sid}
 
 
 async def send_silent_results(

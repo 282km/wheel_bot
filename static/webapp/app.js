@@ -802,7 +802,6 @@ async function boot() {
       log.textContent = "Готовим локальное колесо...";
       if (sendBtn) sendBtn.disabled = true;
       silentSpinRunning = true;
-      silentCurrentSessionId = null;
       renderSilentResults([]);
       try {
         const res = await api("/api/wheel/silent-spin", {
@@ -812,6 +811,7 @@ async function boot() {
             deposit_amount,
             prizes: prizesRaw,
             selected_ids: selectedIds,
+            session_id: silentCurrentSessionId,
           }),
         });
         const rounds = Array.isArray(res.rounds) ? res.rounds : [];
@@ -863,7 +863,7 @@ async function boot() {
         .filter(Boolean)
         .map((x) => Number(x));
       try {
-        await api("/api/wheel/silent-announce", {
+        const res = await api("/api/wheel/silent-announce", {
           method: "POST",
           body: JSON.stringify({
             depositor_id,
@@ -872,6 +872,7 @@ async function boot() {
             selected_ids: selectedIds,
           }),
         });
+        silentCurrentSessionId = Number(res.session_id || 0) || null;
         tgAlert("Анонс отправлен в чат.");
       } catch (err) {
         tgAlert(String(err.message || err));

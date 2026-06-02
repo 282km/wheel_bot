@@ -261,6 +261,8 @@ def create_app(
             deposit_amount = float(body.get("deposit_amount"))
             prizes = [float(x) for x in (body.get("prizes") or [])]
             selected_ids = [int(x) for x in (body.get("selected_ids") or [])]
+            session_id_raw = body.get("session_id")
+            session_id = int(session_id_raw) if session_id_raw is not None else None
             async with db_lock:
                 result = await run_wheel_spin_silent(
                     conn=conn,
@@ -271,6 +273,7 @@ def create_app(
                     deposit_amount=deposit_amount,
                     selected_ids=selected_ids,
                     prizes=prizes,
+                    session_id=session_id,
                 )
             return JSONResponse(result)
         except ValueError as e:
