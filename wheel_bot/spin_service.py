@@ -181,18 +181,6 @@ async def run_wheel_spin_silent(
         results_sent=False,
     )
 
-    prize_lines = [f"{idx}. ${float(prize):g}" for idx, prize in enumerate(prizes, start=1)]
-    announce_text = _fmt_template(
-        templates["announce"],
-        wheel_id=sid,
-        depositor=depositor_label,
-        deposit_amount=f"{float(deposit_amount):g}",
-        prize_pool=f"{prize_pool:g}",
-        winners_count=len(prizes),
-        prize_lines="\n".join(prize_lines),
-    )
-    await bot.send_message(chat_id, announce_text)
-
     remaining_rows = roster_rows.copy()
     rounds: list[dict[str, Any]] = []
     for rnd, prize in enumerate(prizes, start=1):
@@ -217,6 +205,43 @@ async def run_wheel_spin_silent(
     await db.set_draft_ids(conn, roster_ids)
 
     return {"session_id": sid, "rounds": rounds}
+
+
+async def send_silent_announce(
+    *,
+    conn: Any,
+    bot: Bot,
+    chat_id: int,
+    admin_telegram_id: int,
+    depositor_id: int,
+    deposit_amount: float,
+    selected_ids: list[int],
+    prizes: list[float],
+) -> dict[str, Any]:
+    _roster_ids, roster_rows, templates, depositor_label, prize_pool = await _prepare_spin_data(
+        conn, admin_telegram_id, depositor_id, deposit_amount, selected_ids, prizes
+    )
+    prize_lines = [f"{idx}. ${float(prize):g}" for idx, prize in enumerate(prizes, start=1)]
+    announce_text = _fmt_template(
+        templates["announce"],
+        wheel_id="(режим тишины)",
+        depositor=depositor_label,
+        deposit_amount=f"{float(deposit_amount):g}",
+        prize_pool=f"{prize_pool:g}",
+        winners_count=len(prizes),
+        prize_lines="\n".join(prize_lines),
+    )
+    members_lines = [
+        f"{idx}. {_participant_label(str(row[1]), str(row[2]))}" for idx, row in enumerate(roster_rows, start=1)
+    ]
+    text = (
+        f"{announce_text}\n\n"
+        f"👥 Участники текущего колеса:\n"
+        f"{chr(10).join(members_lines)}\n\n"
+        f"🤫 Режим тишины: кручение проходит в WebApp."
+    )
+    await bot.send_message(chat_id, text)
+    return {"ok": True}
 
 
 async def send_silent_results(

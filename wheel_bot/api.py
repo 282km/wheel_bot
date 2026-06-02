@@ -18,7 +18,7 @@ from starlette.staticfiles import StaticFiles
 from wheel_bot import db
 from wheel_bot.config import Settings
 from wheel_bot.session_token import issue_token, make_session_payload, verify_token
-from wheel_bot.spin_service import run_wheel_spin, run_wheel_spin_silent, send_silent_results
+from wheel_bot.spin_service import run_wheel_spin, run_wheel_spin_silent, send_silent_announce, send_silent_results
 from wheel_bot.tg_validate import validate_webapp_init_data
 
 
@@ -295,6 +295,33 @@ def create_app(
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    async def wheel_silent_announce(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            body = _json_body(await request.body()) or {}
+            depositor_id = int(body.get("depositor_id"))
+            deposit_amount = float(body.get("deposit_amount"))
+            prizes = [float(x) for x in (body.get("prizes") or [])]
+            selected_ids = [int(x) for x in (body.get("selected_ids") or [])]
+            async with db_lock:
+                result = await send_silent_announce(
+                    conn=conn,
+                    bot=bot,
+                    chat_id=int(settings.target_chat_id),
+                    admin_telegram_id=int(payload["tg_id"]),
+                    depositor_id=depositor_id,
+                    deposit_amount=deposit_amount,
+                    selected_ids=selected_ids,
+                    prizes=prizes,
+                )
+            return JSONResponse(result)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     async def wheel_history(request: Request) -> Response:
         try:
             payload = await _auth(request, settings)
@@ -400,6 +427,7 @@ def create_app(
         Route("/api/wheel/spin", wheel_spin, methods=["POST"]),
         Route("/api/wheel/preview-send", wheel_preview_send, methods=["POST"]),
         Route("/api/wheel/silent-spin", wheel_silent_spin, methods=["POST"]),
+        Route("/api/wheel/silent-announce", wheel_silent_announce, methods=["POST"]),
         Route("/api/wheel/silent-send-results", wheel_silent_send_results, methods=["POST"]),
         Route("/api/wheel/history", wheel_history, methods=["GET"]),
         Route("/api/message-templates", message_templates_get, methods=["GET"]),

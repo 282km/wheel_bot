@@ -791,7 +791,7 @@ async function boot() {
       const log = $("#spin-silent-log");
       const winnerLine = $("#silent-wheel-winner");
       const sendBtn = $("#silent-send-results");
-      log.textContent = "Отправляем анонс и готовим локальное колесо...";
+      log.textContent = "Готовим локальное колесо...";
       if (sendBtn) sendBtn.disabled = true;
       silentSpinRunning = true;
       silentCurrentSessionId = null;
@@ -838,6 +838,33 @@ async function boot() {
         });
         tgAlert("Результаты отправлены в чат.");
         sendSilentResultsBtn.disabled = true;
+      } catch (err) {
+        tgAlert(String(err.message || err));
+      }
+    });
+  }
+
+  const sendSilentAnnounceBtn = $("#silent-send-announce");
+  if (sendSilentAnnounceBtn) {
+    sendSilentAnnounceBtn.addEventListener("click", async () => {
+      const depositor_id = Number($("#depositor-silent")?.value || "0");
+      const deposit_amount = Number($("#deposit_amount-silent")?.value || "0");
+      const prizesRaw = String($("#prizes-silent")?.value || "")
+        .split(/\r?\n/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => Number(x));
+      try {
+        await api("/api/wheel/silent-announce", {
+          method: "POST",
+          body: JSON.stringify({
+            depositor_id,
+            deposit_amount,
+            prizes: prizesRaw,
+            selected_ids: selectedIds,
+          }),
+        });
+        tgAlert("Анонс отправлен в чат.");
       } catch (err) {
         tgAlert(String(err.message || err));
       }
