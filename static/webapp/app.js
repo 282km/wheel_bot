@@ -171,49 +171,6 @@ function buildSilentSegments(roster) {
   });
 }
 
-function silentLegendRows(roster) {
-  const src = Array.isArray(roster) ? roster : [];
-  if (src.length) {
-    return src.map((p, idx) => ({
-      num: p.num ?? idx + 1,
-      id: p.id,
-      nick: p.nick || p.poker_nick || "",
-      color: p.color || silentColorForParticipantId(p.id),
-    }));
-  }
-  return selectedIds
-    .map((id, idx) => {
-      const p = participants.find((x) => x.id === id);
-      if (!p) return null;
-      return {
-        num: idx + 1,
-        id: p.id,
-        nick: p.poker_nick || "",
-        color: silentColorForParticipantId(id),
-      };
-    })
-    .filter(Boolean);
-}
-
-function renderSilentLegend(roster) {
-  const root = $("#silent-wheel-legend");
-  if (!root) return;
-  root.innerHTML = "";
-  const rows = silentLegendRows(roster);
-  if (!rows.length) {
-    root.innerHTML = '<div class="muted" style="font-size:13px">Добавьте участников в текущее колесо</div>';
-    return;
-  }
-  for (const row of rows) {
-    const el = document.createElement("div");
-    el.className = "silent-legend-item";
-    el.innerHTML = `<span class="silent-legend-num">${row.num}.</span><span class="silent-dot" style="background:${row.color}"></span><span class="silent-legend-nick">${escapeHtml(
-      row.nick
-    )}</span>`;
-    root.appendChild(el);
-  }
-}
-
 function hideSilentCenterOverlay() {
   if (silentCenterOverlayTimer) {
     clearTimeout(silentCenterOverlayTimer);
@@ -277,6 +234,82 @@ function setSilentWheelRotation(deg, animate) {
   canvas.style.transform = `rotate(${deg}deg)`;
 }
 
+function wrapNickLines(ctx, nick, maxWidth, maxLines) {
+  const raw = String(nick || "").trim();
+  if (!raw) return [""];
+  const words = raw.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = "";
+
+  const pushLine = (line) => {
+    if (!line) return;
+    lines.push(line);
+    current = "";
+  };
+
+  const splitLongWord = (word) => {
+    let chunk = "";
+    for (const ch of word) {
+      const next = chunk + ch;
+      if (!chunk || ctx.measureText(next).width <= maxWidth) {
+        chunk = next;
+      } else {
+        pushLine(chunk);
+        chunk = ch;
+        if (lines.length >= maxLines) return;
+      }
+    }
+    current = chunk;
+  };
+
+  for (const word of words) {
+    if (lines.length >= maxLines) break;
+    const candidate = current ? `${current} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      current = candidate;
+      continue;
+    }
+    if (current) {
+      pushLine(current);
+      if (lines.length >= maxLines) break;
+    }
+    if (ctx.measureText(word).width <= maxWidth) {
+      current = word;
+    } else {
+      splitLongWord(word);
+    }
+  }
+  if (current && lines.length < maxLines) lines.push(current);
+  return lines.length ? lines.slice(0, maxLines) : [raw.slice(0, Math.max(1, Math.floor(maxWidth / 7)))];
+}
+
+function fitNickLabel(ctx, nick, maxWidth, maxHeight, maxFont, minFont) {
+  for (let size = maxFont; size >= minFont; size -= 1) {
+    ctx.font = `600 ${size}px system-ui, sans-serif`;
+    const lineHeight = size * 1.1;
+    const maxLines = Math.max(1, Math.floor(maxHeight / lineHeight));
+    const lines = wrapNickLines(ctx, nick, maxWidth, maxLines);
+    const blockH = lines.length * lineHeight;
+    const fits = blockH <= maxHeight && lines.every((ln) => ctx.measureText(ln).width <= maxWidth);
+    if (fits) return { lines, size, lineHeight };
+  }
+  ctx.font = `600 ${minFont}px system-ui, sans-serif`;
+  const lineHeight = minFont * 1.1;
+  const maxLines = Math.max(1, Math.floor(maxHeight / lineHeight));
+  return { lines: wrapNickLines(ctx, nick, maxWidth, maxLines), size: minFont, lineHeight };
+}
+
+function drawSilentSectorNick(ctx, nick, maxWidth, maxHeight, maxFont, minFont) {
+  const { lines, size, lineHeight } = fitNickLabel(ctx, nick, maxWidth, maxHeight, maxFont, minFont);
+  ctx.font = `600 ${size}px system-ui, sans-serif`;
+  let y = -((lines.length - 1) * lineHeight) / 2;
+  for (const line of lines) {
+    ctx.strokeText(line, 0, y);
+    ctx.fillText(line, 0, y);
+    y += lineHeight;
+  }
+}
+
 function drawSilentWheelCanvas(roster) {
   const canvas = ensureSilentCanvas();
   if (!canvas) return;
@@ -305,10 +338,13 @@ function drawSilentWheelCanvas(roster) {
   const cy = css / 2;
   const pad = Math.max(8, css * 0.03);
   const outerR = css / 2 - pad;
-  const hubR = Math.max(outerR * 0.22, Math.min(outerR * 0.34, css * 0.14));
+  const hubRatio = n > 18 ? 0.12 : n > 12 ? 0.15 : n > 8 ? 0.18 : 0.24;
+  const hubR = Math.max(outerR * hubRatio, css * 0.08);
   const step = (Math.PI * 2) / n;
   const labelR = (outerR + hubR) / 2;
-  const numFont = Math.max(12, Math.min(26, Math.round((outerR - hubR) * 0.42)));
+  const bandH = outerR - hubR;
+  const maxFont = Math.max(9, Math.min(16, Math.round(bandH * 0.34)));
+  const minFont = Math.max(7, maxFont - 5);
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
 
@@ -341,8 +377,9 @@ function drawSilentWheelCanvas(roster) {
     const mid = start + step / 2;
     const lx = cx + labelR * Math.cos(mid);
     const ly = cy + labelR * Math.sin(mid);
-    const label = String(roster[i].num ?? i + 1);
-    ctx.font = `700 ${numFont}px system-ui, sans-serif`;
+    const nick = String(roster[i].nick || "").trim();
+    const maxW = 2 * labelR * Math.sin(step / 2) * 0.94;
+    const maxH = bandH * 0.9;
 
     ctx.save();
     ctx.beginPath();
@@ -356,10 +393,11 @@ function drawSilentWheelCanvas(roster) {
     ctx.rotate(rot);
     ctx.fillStyle = "#ffffff";
     ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2.5;
     ctx.lineJoin = "round";
-    ctx.strokeText(label, 0, 0);
-    ctx.fillText(label, 0, 0);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    drawSilentSectorNick(ctx, nick, maxW, maxH, maxFont, minFont);
     ctx.restore();
   }
 }
@@ -775,7 +813,6 @@ function paintSilentWheel(roster) {
   hideSilentCenterOverlay();
   silentWheelRotationDeg = 0;
   drawSilentWheelCanvas(roster);
-  renderSilentLegend(roster);
   const canvas = $("#silent-wheel-canvas");
   if (canvas) {
     setSilentWheelRotation(0, false);
@@ -807,10 +844,9 @@ async function animateSilentRound(round) {
   winnerLine.textContent = `Раунд ${round.round}: крутится...`;
   await sleep(5000);
 
-  const winnerNum = winnerIdx + 1;
   const winnerColor = silentColorForParticipantId(round.winner_id);
-  showSilentCenterOverlay(round.round, `${winnerNum}. ${round.winner_nick}`, round.prize, 2600);
-  winnerLine.innerHTML = `Раунд ${round.round}: <strong><span class="silent-dot" style="background:${winnerColor}"></span> ${winnerNum}. ${escapeHtml(
+  showSilentCenterOverlay(round.round, round.winner_nick, round.prize, 2600);
+  winnerLine.innerHTML = `Раунд ${round.round}: <strong><span class="silent-dot" style="background:${winnerColor}"></span> ${escapeHtml(
     round.winner_nick
   )}</strong> — ${fmtMoney(round.prize)}`;
   await sleep(2800);
@@ -1070,7 +1106,6 @@ async function boot() {
           await animateSilentRound(round);
         }
         renderSilentResults(rounds);
-        renderSilentLegend([]);
         silentCurrentSessionId = Number(res.session_id || 0) || null;
         if (winnerLine) winnerLine.textContent = "Кручение завершено. Проверьте победителей и отправьте результаты в чат.";
         if (sendBtn) sendBtn.disabled = !silentCurrentSessionId;

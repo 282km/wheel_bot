@@ -273,37 +273,6 @@ footer {
   font-size: 16px;
 }
 
-.silent-wheel-legend {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 2px 0 10px;
-  max-height: 220px;
-  overflow-y: auto;
-  padding: 4px 2px;
-}
-
-.silent-legend-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  color: #cfd6e8;
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-.silent-legend-num {
-  flex: 0 0 auto;
-  min-width: 1.6em;
-  font-weight: 700;
-  color: #9aa8c4;
-}
-
-.silent-legend-nick {
-  flex: 1 1 auto;
-  word-break: break-word;
-}
-
 .wheel-num {
   color: #7ee8d0;
   margin-right: 4px;
