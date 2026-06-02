@@ -543,8 +543,10 @@ function renderSilentRosterList(roster) {
 function paintSilentWheel(roster) {
   const disc = $("#silent-wheel-disc");
   if (!disc) return;
+  // Keep static preview aligned with legend colors.
+  disc.style.transition = "none";
+  disc.style.transform = "rotate(0deg)";
   if (!roster || !roster.length) {
-    disc.style.transform = "rotate(0deg)";
     disc.style.background = "#1a1e2a";
     disc.innerHTML = '<div class="silent-wheel-empty">Добавьте участников и нажмите «Крутить колесо»</div>';
     return;
@@ -563,7 +565,7 @@ function paintSilentWheel(roster) {
       const radius = 31;
       const x = 50 + Math.cos(ang) * radius;
       const y = 50 + Math.sin(ang) * radius;
-      let textRotate = angDeg + 90;
+      let textRotate = angDeg;
       if (textRotate > 90) textRotate -= 180;
       if (textRotate < -90) textRotate += 180;
       return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(
