@@ -548,8 +548,8 @@ function paintSilentWheel(roster) {
       const radius = roster.length >= 10 ? 34 : 38;
       const x = 50 + Math.cos(ang) * radius;
       const y = 50 + Math.sin(ang) * radius;
-      // Tangential text is easier to keep visually inside a slice.
-      let textRotate = angDeg + 90;
+      // Align text along the slice axis.
+      let textRotate = angDeg;
       if (textRotate > 90) textRotate -= 180;
       if (textRotate < -90) textRotate += 180;
       return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(
