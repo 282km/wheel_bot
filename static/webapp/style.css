@@ -35,6 +35,11 @@ header.top {
   color: #e8fff9;
 }
 
+.tabs button.tab-nav:not(:disabled):active {
+  transform: scale(0.97);
+  filter: brightness(0.92);
+}
+
 .tabs button.tab-nav.active {
   border-color: #5eead4;
   background: #245a52;
@@ -91,11 +96,88 @@ button {
   padding: 8px;
 }
 
+button {
+  cursor: pointer;
+  transition:
+    transform 0.08s ease,
+    filter 0.1s ease,
+    background 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled):active {
+  transform: scale(0.96);
+  filter: brightness(0.9);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+button.is-busy {
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+button.btn-flash-ok {
+  animation: btnFlashOk 0.55s ease;
+}
+
+button.btn-flash-err {
+  animation: btnFlashErr 0.55s ease;
+}
+
+@keyframes btnFlashOk {
+  0% {
+    box-shadow: 0 0 0 0 rgba(94, 234, 212, 0.55);
+  }
+  45% {
+    border-color: #5eead4;
+    background: #1a3d35;
+    box-shadow: 0 0 0 3px rgba(94, 234, 212, 0.28);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+@keyframes btnFlashErr {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 120, 120, 0.55);
+  }
+  45% {
+    border-color: #c07070;
+    background: #3a2222;
+    box-shadow: 0 0 0 3px rgba(245, 120, 120, 0.22);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
 button.primary {
   background: #2b6cff;
   border-color: #2b6cff;
   padding: 10px 12px;
   margin-top: 10px;
+}
+
+button.primary:not(:disabled):active {
+  background: #2459d4;
+  border-color: #2459d4;
+}
+
+.draft-status-ok {
+  color: #7ee8d0 !important;
+  font-weight: 600;
+}
+
+.draft-status-err {
+  color: #f5a8a8 !important;
+  font-weight: 600;
 }
 
 .split {
@@ -191,6 +273,10 @@ button.primary {
   font-size: 16px;
   font-weight: 700;
   border-radius: 6px;
+}
+
+.btn-wheel-mini:not(:disabled):active {
+  transform: scale(0.9);
 }
 
 .card-wheel-dragging {

@@ -113,6 +113,46 @@ function onSubmit(sel, handler) {
   if (el) el.addEventListener("submit", handler);
 }
 
+function flashButton(el, kind = "ok") {
+  if (!el) return;
+  el.classList.remove("btn-flash-ok", "btn-flash-err");
+  void el.offsetWidth;
+  el.classList.add(kind === "err" ? "btn-flash-err" : "btn-flash-ok");
+  window.setTimeout(() => el.classList.remove("btn-flash-ok", "btn-flash-err"), 560);
+}
+
+function tapButton(el, kind = "ok") {
+  flashButton(el, kind);
+}
+
+async function withButtonFeedback(btn, fn) {
+  if (!btn) return fn();
+  if (btn.disabled) return;
+  btn.classList.add("is-busy");
+  btn.disabled = true;
+  try {
+    const result = await fn();
+    flashButton(btn, "ok");
+    return result;
+  } catch (err) {
+    flashButton(btn, "err");
+    throw err;
+  } finally {
+    btn.classList.remove("is-busy");
+    btn.disabled = false;
+  }
+}
+
+function setDraftStatus(text, kind = "") {
+  for (const el of [$("#draft-status"), $("#draft-status-silent")]) {
+    if (!el) continue;
+    el.textContent = text;
+    el.classList.remove("draft-status-ok", "draft-status-err");
+    if (kind === "ok") el.classList.add("draft-status-ok");
+    if (kind === "err") el.classList.add("draft-status-err");
+  }
+}
+
 function resolveTelegramInitData() {
   const tg = getTg();
   if (!tg) {
@@ -807,14 +847,38 @@ async function reloadDraftUi() {
   ensureAddFormReady();
 }
 
-async function saveDraft() {
-  $("#draft-status").textContent = "Сохранение…";
-  await api("/api/wheel/draft", {
-    method: "PUT",
-    body: JSON.stringify({ selected_ids: selectedIds }),
+async function saveDraft(triggerBtn) {
+  const saveBtns = [$("#save-draft"), $("#save-draft-silent")].filter(Boolean);
+  setDraftStatus("Сохранение…");
+  for (const b of saveBtns) b.classList.add("is-busy");
+  try {
+    await api("/api/wheel/draft", {
+      method: "PUT",
+      body: JSON.stringify({ selected_ids: selectedIds }),
+    });
+    setDraftStatus("Сохранено ✓", "ok");
+    for (const b of saveBtns) flashButton(b, "ok");
+    if (triggerBtn && !saveBtns.includes(triggerBtn)) flashButton(triggerBtn, "ok");
+    window.setTimeout(() => setDraftStatus(""), 2200);
+  } catch (err) {
+    setDraftStatus("Ошибка", "err");
+    if (triggerBtn) flashButton(triggerBtn, "err");
+    throw err;
+  } finally {
+    for (const b of saveBtns) b.classList.remove("is-busy");
+  }
+}
+
+function bindSaveDraftClick(btn) {
+  if (!btn || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", async (e) => {
+    try {
+      await saveDraft(e.currentTarget);
+    } catch (err) {
+      tgAlert(String(err && err.message ? err.message : err));
+    }
   });
-  $("#draft-status").textContent = "Сохранено";
-  setTimeout(() => ($("#draft-status").textContent = ""), 1200);
 }
 
 function setTab(name) {
@@ -902,14 +966,13 @@ function bindAdminTestButton(btn, path, label) {
   if (!btn || btn.dataset.bound === "1") return;
   btn.dataset.bound = "1";
   btn.addEventListener("click", async () => {
-    btn.disabled = true;
     try {
-      const res = await api(path, { method: "POST" });
-      tgAlert(`Тест отправлен в ${label} (${res.chat_id}).`);
+      await withButtonFeedback(btn, async () => {
+        const res = await api(path, { method: "POST" });
+        tgAlert(`Тест отправлен в ${label} (${res.chat_id}).`);
+      });
     } catch (err) {
       tgAlert(String(err && err.message ? err.message : err));
-    } finally {
-      btn.disabled = false;
     }
   });
 }
@@ -942,26 +1005,26 @@ function bindWheelPostSettings() {
       const statsRaw = ($("#cfg-stats-chat-id")?.value || "").trim();
       const channelRaw = ($("#cfg-wheel-channel-id")?.value || "").trim();
       if (!statsRaw) {
+        tapButton(saveBtn, "err");
         tgAlert("Укажите ID чата.");
         return;
       }
-      saveBtn.disabled = true;
       try {
-        const body = {
-          stats_chat_id: Number(statsRaw),
-          wheel_channel_id: channelRaw === "" ? null : Number(channelRaw),
-        };
-        const data = await api("/api/wheel/post-settings", {
-          method: "PUT",
-          body: JSON.stringify(body),
+        await withButtonFeedback(saveBtn, async () => {
+          const body = {
+            stats_chat_id: Number(statsRaw),
+            wheel_channel_id: channelRaw === "" ? null : Number(channelRaw),
+          };
+          const data = await api("/api/wheel/post-settings", {
+            method: "PUT",
+            body: JSON.stringify(body),
+          });
+          fillChatIdInputs(data);
+          updateWheelPostStatusUi(data);
+          tgAlert("ID сохранены.");
         });
-        fillChatIdInputs(data);
-        updateWheelPostStatusUi(data);
-        tgAlert("ID сохранены.");
       } catch (err) {
         tgAlert(String(err && err.message ? err.message : err));
-      } finally {
-        saveBtn.disabled = false;
       }
     });
   }
@@ -1205,7 +1268,10 @@ async function boot() {
     b.dataset.tab = id;
     b.classList.add("tab-nav");
     b.textContent = label;
-    b.addEventListener("click", () => setTab(id));
+    b.addEventListener("click", (e) => {
+      tapButton(e.currentTarget);
+      setTab(id);
+    });
     tabs.appendChild(b);
   };
 
@@ -1234,24 +1300,27 @@ async function boot() {
 
   $("#add-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const submitBtn = e.submitter || $("#add-submit");
     const fd = new FormData(e.target);
     const nick = String(fd.get("nick") || "").trim();
     const desc = String(fd.get("desc") || "").trim();
     try {
-      if (editingParticipantId) {
-        await api(`/api/participants/${editingParticipantId}`, {
-          method: "PATCH",
-          body: JSON.stringify({ poker_nick: nick, description: desc }),
-        });
-      } else {
-        await api("/api/participants", {
-          method: "POST",
-          body: JSON.stringify({ poker_nick: nick, description: desc }),
-        });
-      }
-      resetParticipantForm();
-      await reloadParticipants();
-      await reloadDraftUi();
+      await withButtonFeedback(submitBtn, async () => {
+        if (editingParticipantId) {
+          await api(`/api/participants/${editingParticipantId}`, {
+            method: "PATCH",
+            body: JSON.stringify({ poker_nick: nick, description: desc }),
+          });
+        } else {
+          await api("/api/participants", {
+            method: "POST",
+            body: JSON.stringify({ poker_nick: nick, description: desc }),
+          });
+        }
+        resetParticipantForm();
+        await reloadParticipants();
+        await reloadDraftUi();
+      });
     } catch (err) {
       const msg = String(err && err.message ? err.message : err);
       if (msg.includes("nick already exists")) {
@@ -1262,32 +1331,36 @@ async function boot() {
       ensureAddFormReady();
     }
   });
-  $("#add-cancel-edit").addEventListener("click", () => {
+  $("#add-cancel-edit").addEventListener("click", (e) => {
+    tapButton(e.currentTarget);
     resetParticipantForm();
     ensureAddFormReady();
   });
 
-  $("#save-draft").addEventListener("click", saveDraft);
-  const saveDraftSilent = $("#save-draft-silent");
-  if (saveDraftSilent) saveDraftSilent.addEventListener("click", saveDraft);
-  $("#add-all").addEventListener("click", () => {
+  bindSaveDraftClick($("#save-draft"));
+  bindSaveDraftClick($("#save-draft-silent"));
+  $("#add-all").addEventListener("click", (e) => {
+    tapButton(e.currentTarget);
     selectedIds = participants.map((p) => p.id);
     renderPoolAndPicked();
   });
   const addAllSilent = $("#add-all-silent");
   if (addAllSilent) {
-    addAllSilent.addEventListener("click", () => {
+    addAllSilent.addEventListener("click", (e) => {
+      tapButton(e.currentTarget);
       selectedIds = participants.map((p) => p.id);
       renderPoolAndPicked();
     });
   }
-  $("#clear-all").addEventListener("click", () => {
+  $("#clear-all").addEventListener("click", (e) => {
+    tapButton(e.currentTarget);
     selectedIds = [];
     renderPoolAndPicked();
   });
   const clearAllSilent = $("#clear-all-silent");
   if (clearAllSilent) {
-    clearAllSilent.addEventListener("click", () => {
+    clearAllSilent.addEventListener("click", (e) => {
+      tapButton(e.currentTarget);
       selectedIds = [];
       renderPoolAndPicked();
     });
@@ -1295,16 +1368,20 @@ async function boot() {
 
   const btnCopyWheel = $("#wheel-copy-list");
   if (btnCopyWheel) {
-    btnCopyWheel.addEventListener("click", async () => {
+    btnCopyWheel.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
       const text = buildWheelPlainText().trim();
       if (!text) {
+        tapButton(btn, "err");
         tgAlert("Добавьте участников в текущее колесо.");
         return;
       }
       try {
         await navigator.clipboard.writeText(text);
+        tapButton(btn, "ok");
         tgAlert("Список скопирован в буфер.");
       } catch {
+        tapButton(btn, "err");
         tgAlert("Не удалось скопировать в буфер. Попробуйте ещё раз или скопируйте состав из списка справа вручную.");
       }
     });
@@ -1312,17 +1389,21 @@ async function boot() {
 
   const btnSendPreview = $("#wheel-send-preview");
   if (btnSendPreview) {
-    btnSendPreview.addEventListener("click", async () => {
+    btnSendPreview.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
       if (!selectedIds.length) {
+        tapButton(btn, "err");
         tgAlert("Добавьте участников в текущее колесо.");
         return;
       }
       try {
-        await api("/api/wheel/preview-send", {
-          method: "POST",
-          body: JSON.stringify({ selected_ids: selectedIds }),
+        await withButtonFeedback(btn, async () => {
+          await api("/api/wheel/preview-send", {
+            method: "POST",
+            body: JSON.stringify({ selected_ids: selectedIds }),
+          });
+          tgAlert("Список отправлен в чат.");
         });
-        tgAlert("Список отправлен в чат.");
       } catch (err) {
         tgAlert(String(err.message || err));
       }
@@ -1343,7 +1424,8 @@ async function boot() {
     renderHistory();
   });
 
-  $("#spin").addEventListener("click", async () => {
+  $("#spin").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
     const depositor_id = Number($("#depositor").value || "0");
     const deposit_amount = Number($("#deposit_amount").value || "0");
     const prizesRaw = String($("#prizes").value || "")
@@ -1354,18 +1436,20 @@ async function boot() {
     const announceDelaySec = Number($("#announce_delay_sec").value || "30");
     $("#spin-log").textContent = "Крутим…";
     try {
-      const res = await api("/api/wheel/spin", {
-        method: "POST",
-        body: JSON.stringify({
-          depositor_id,
-          deposit_amount,
-          prizes: prizesRaw,
-          selected_ids: selectedIds,
-          announce_delay_sec: announceDelaySec,
-        }),
+      await withButtonFeedback(btn, async () => {
+        const res = await api("/api/wheel/spin", {
+          method: "POST",
+          body: JSON.stringify({
+            depositor_id,
+            deposit_amount,
+            prizes: prizesRaw,
+            selected_ids: selectedIds,
+            announce_delay_sec: announceDelaySec,
+          }),
+        });
+        $("#spin-log").textContent = JSON.stringify(res, null, 2);
+        tgAlert("Готово: результаты отправлены в чат.");
       });
-      $("#spin-log").textContent = JSON.stringify(res, null, 2);
-      tgAlert("Готово: результаты отправлены в чат.");
     } catch (err) {
       $("#spin-log").textContent = String(err.message || err);
       tgAlert(String(err.message || err));
@@ -1374,8 +1458,11 @@ async function boot() {
 
   const spinSilentBtn = $("#spin-silent");
   if (spinSilentBtn) {
-    spinSilentBtn.addEventListener("click", async () => {
+    spinSilentBtn.addEventListener("click", async (e) => {
       if (silentSpinRunning) return;
+      const spinBtn = e.currentTarget;
+      spinBtn.classList.add("is-busy");
+      spinBtn.disabled = true;
       const depositor_id = Number($("#depositor-silent")?.value || "0");
       const deposit_amount = Number($("#deposit_amount-silent")?.value || "0");
       const prizesRaw = String($("#prizes-silent")?.value || "")
@@ -1416,40 +1503,53 @@ async function boot() {
         }
         if (sendBtn) sendBtn.disabled = !silentSpunSessionId;
         log.textContent = JSON.stringify({ session_id: res.session_id, rounds: rounds.length }, null, 2);
+        flashButton(spinBtn, "ok");
       } catch (err) {
         log.textContent = String(err.message || err);
+        flashButton(spinBtn, "err");
         tgAlert(String(err.message || err));
       } finally {
         silentSpinRunning = false;
+        spinBtn.classList.remove("is-busy");
+        spinBtn.disabled = false;
       }
     });
   }
 
   const sendSilentResultsBtn = $("#silent-send-results");
   if (sendSilentResultsBtn) {
-    sendSilentResultsBtn.addEventListener("click", async () => {
+    sendSilentResultsBtn.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
       if (!silentSpunSessionId) {
+        tapButton(btn, "err");
         tgAlert("Сначала нажмите «Крутить колесо». Анонс сам по себе не создаёт победителей.");
         return;
       }
+      btn.classList.add("is-busy");
+      btn.disabled = true;
       try {
         await api("/api/wheel/silent-send-results", {
           method: "POST",
           body: JSON.stringify({ session_id: silentSpunSessionId }),
         });
+        flashButton(btn, "ok");
         tgAlert(`Результаты колеса #${silentSpunSessionId} отправлены в чат.`);
-        sendSilentResultsBtn.disabled = true;
         silentSpunSessionId = null;
         updateSilentSessionStatus();
       } catch (err) {
+        flashButton(btn, "err");
+        btn.disabled = false;
         tgAlert(String(err.message || err));
+      } finally {
+        btn.classList.remove("is-busy");
       }
     });
   }
 
   const sendSilentAnnounceBtn = $("#silent-send-announce");
   if (sendSilentAnnounceBtn) {
-    sendSilentAnnounceBtn.addEventListener("click", async () => {
+    sendSilentAnnounceBtn.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
       const depositor_id = Number($("#depositor-silent")?.value || "0");
       const deposit_amount = Number($("#deposit_amount-silent")?.value || "0");
       const prizesRaw = String($("#prizes-silent")?.value || "")
@@ -1458,23 +1558,25 @@ async function boot() {
         .filter(Boolean)
         .map((x) => Number(x));
       try {
-        const res = await api("/api/wheel/silent-announce", {
-          method: "POST",
-          body: JSON.stringify({
-            depositor_id,
-            deposit_amount,
-            prizes: prizesRaw,
-            selected_ids: selectedIds,
-          }),
+        await withButtonFeedback(btn, async () => {
+          const res = await api("/api/wheel/silent-announce", {
+            method: "POST",
+            body: JSON.stringify({
+              depositor_id,
+              deposit_amount,
+              prizes: prizesRaw,
+              selected_ids: selectedIds,
+            }),
+          });
+          silentAnnounceSessionId = Number(res.session_id || 0) || null;
+          silentSpunSessionId = null;
+          updateSilentSessionStatus();
+          const sendBtn = $("#silent-send-results");
+          if (sendBtn) sendBtn.disabled = true;
+          tgAlert(
+            `Анонс отправлен (колесо #${silentAnnounceSessionId}). Теперь нажмите «Крутить колесо», затем «Отправить результаты».`
+          );
         });
-        silentAnnounceSessionId = Number(res.session_id || 0) || null;
-        silentSpunSessionId = null;
-        updateSilentSessionStatus();
-        const sendBtn = $("#silent-send-results");
-        if (sendBtn) sendBtn.disabled = true;
-        tgAlert(
-          `Анонс отправлен (колесо #${silentAnnounceSessionId}). Теперь нажмите «Крутить колесо», затем «Отправить результаты».`
-        );
       } catch (err) {
         tgAlert(String(err.message || err));
       }
@@ -1492,32 +1594,53 @@ async function boot() {
   if (adminForm) {
     adminForm.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const fd = new FormData(e.target);
-      const tid = Number(fd.get("tid") || "0");
-      await api("/api/admins", { method: "POST", body: JSON.stringify({ telegram_id: tid }) });
-      e.target.reset();
-      await reloadAdmins();
+      const submitBtn = e.submitter || adminForm.querySelector('button[type="submit"]');
+      try {
+        await withButtonFeedback(submitBtn, async () => {
+          const fd = new FormData(e.target);
+          const tid = Number(fd.get("tid") || "0");
+          await api("/api/admins", { method: "POST", body: JSON.stringify({ telegram_id: tid }) });
+          e.target.reset();
+          await reloadAdmins();
+        });
+      } catch (err) {
+        tgAlert(String(err && err.message ? err.message : err));
+      }
     });
   }
   onSubmit("#templates-form", async (e) => {
     e.preventDefault();
-    await api("/api/message-templates", {
-      method: "PUT",
-      body: JSON.stringify({
-        templates: {
-          announce: String($("#tpl-announce").value || ""),
-          round_caption: String($("#tpl-round-caption").value || ""),
-          finish: String($("#tpl-finish").value || ""),
-        },
-      }),
-    });
-    tgAlert("Шаблоны сохранены.");
+    const submitBtn = e.submitter || e.target.querySelector('button[type="submit"]');
+    try {
+      await withButtonFeedback(submitBtn, async () => {
+        await api("/api/message-templates", {
+          method: "PUT",
+          body: JSON.stringify({
+            templates: {
+              announce: String($("#tpl-announce").value || ""),
+              round_caption: String($("#tpl-round-caption").value || ""),
+              finish: String($("#tpl-finish").value || ""),
+            },
+          }),
+        });
+        tgAlert("Шаблоны сохранены.");
+      });
+    } catch (err) {
+      tgAlert(String(err && err.message ? err.message : err));
+    }
   });
-  onClick("#tpl-reset-defaults", async () => {
+  onClick("#tpl-reset-defaults", async (e) => {
+    const btn = e.currentTarget;
     if (!(await tgConfirm("Вернуть стандартные шаблоны сообщений?"))) return;
-    await api("/api/message-templates/reset", { method: "POST" });
-    await reloadTemplates();
-    tgAlert("Стандартные шаблоны восстановлены.");
+    try {
+      await withButtonFeedback(btn, async () => {
+        await api("/api/message-templates/reset", { method: "POST" });
+        await reloadTemplates();
+        tgAlert("Стандартные шаблоны восстановлены.");
+      });
+    } catch (err) {
+      tgAlert(String(err && err.message ? err.message : err));
+    }
   });
 
   let silentResizeTimer = null;
