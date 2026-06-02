@@ -141,7 +141,7 @@ async def run_wheel_spin(
 
     remaining_rows = roster_rows.copy()
     results: list[dict[str, Any]] = []
-    gif_rounds: list[tuple[list[tuple[str, str, int]], int]] = []
+    gif_rounds: list[tuple[list[tuple[str, str, int]], int, str]] = []
     caption_lines: list[str] = []
 
     for rnd, prize in enumerate(prizes, start=1):
@@ -154,7 +154,8 @@ async def run_wheel_spin(
 
         winner_slot = next(i for i, row in enumerate(remaining_rows) if int(row[0]) == winner_id)
         gif_roster = [(row[1], row[2], row[3]) for row in remaining_rows]
-        gif_rounds.append((gif_roster, winner_slot))
+        winner_nick_for_overlay = str(winner_row[1])
+        gif_rounds.append((gif_roster, winner_slot, winner_nick_for_overlay))
 
         pwin = await db.get_participant(conn, winner_id)
         nick = _participant_label(pwin.poker_nick, pwin.description) if pwin else str(winner_id)

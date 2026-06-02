@@ -176,20 +176,60 @@ def _pointer_layer(size: int) -> Image.Image:
     return img
 
 
-def _round_badge_layer(size: int, round_no: int) -> Image.Image:
+def _round_winner_overlay_layer(size: int, round_no: int, winner: str) -> Image.Image:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    text = f"Раунд {round_no}"
-    font = _load_font(max(14, size // 24))
-    tw, th = _text_bbox(draw, text, font)
-    pad_x = max(8, size // 40)
-    pad_y = max(4, size // 80)
-    x0 = (size - tw) / 2 - pad_x
-    y0 = size - th - pad_y * 3
-    x1 = (size + tw) / 2 + pad_x
-    y1 = size - pad_y
-    draw.rounded_rectangle((x0, y0, x1, y1), radius=8, fill=(15, 18, 28, 210))
-    draw.text((size / 2 - tw / 2, y0 + pad_y), text, fill=(255, 255, 255, 255), font=font)
+
+    round_text = f"Раунд {round_no}"
+    winner_text = _cut(winner, 40)
+
+    pad_x = max(10, size // 32)
+    pad_y = max(6, size // 54)
+    banner_w = size - pad_x * 2
+    banner_x0 = pad_x
+    banner_x1 = size - pad_x
+
+    # Two-line banner near the top so it doesn't collide with the wheel labels.
+    # Choose font sizes to fit without harsh truncation.
+    top_font = _load_font(max(14, size // 26))
+    top_tw, top_th = _text_bbox(draw, round_text, top_font)
+
+    max_winner_font = max(16, size // 22)
+    min_winner_font = max(12, max_winner_font - 6)
+
+    cur_size = max_winner_font
+    winner_font = _load_font(cur_size)
+    w_tw, w_th = _text_bbox(draw, winner_text, winner_font)
+    # If font cannot fit, decrease until it fits or we hit min_winner_font.
+    while w_tw > banner_w - pad_x * 0.3 and cur_size > min_winner_font:
+        cur_size -= 1
+        winner_font = _load_font(cur_size)
+        w_tw, w_th = _text_bbox(draw, winner_text, winner_font)
+
+    banner_h = top_th + w_th + pad_y * 2 + max(4, size // 120)
+    banner_y0 = pad_y
+    banner_y1 = banner_y0 + banner_h
+
+    draw.rounded_rectangle(
+        (banner_x0, banner_y0, banner_x1, banner_y1),
+        radius=max(10, size // 40),
+        fill=(15, 18, 28, 220),
+        outline=(60, 60, 80, 120),
+        width=max(1, size // 140),
+    )
+
+    draw.text(
+        (size / 2 - top_tw / 2, banner_y0 + pad_y / 2),
+        round_text,
+        fill=(255, 255, 255, 255),
+        font=top_font,
+    )
+    draw.text(
+        (size / 2 - w_tw / 2, banner_y0 + pad_y / 2 + top_th + pad_y * 0.3),
+        winner_text,
+        fill=(255, 255, 255, 255),
+        font=winner_font,
+    )
     return img
 
 
@@ -236,7 +276,7 @@ def _round_spin_frames(
 
 
 def _collect_multi_round_frames(
-    rounds: list[tuple[list[tuple[str, str, int]], int]],
+    rounds: list[tuple[list[tuple[str, str, int]], int, str]],
     *,
     size: int = 420,
     fps: int = 8,
@@ -251,15 +291,15 @@ def _collect_multi_round_frames(
     hold_count = max(2, int(hold_sec * fps))
     gap_count = max(1, int(gap_sec * fps))
 
-    for rnd_idx, (roster, winner_slot) in enumerate(rounds, start=1):
+    for rnd_idx, (roster, winner_slot, winner_label) in enumerate(rounds, start=1):
         spin_frames = _round_spin_frames(roster, winner_slot, size=size, fps=fps, spin_sec=spin_sec)
         all_frames.extend(spin_frames)
 
-        badge = _round_badge_layer(size, rnd_idx)
         pointer = _pointer_layer(size)
         base = _wheel_layer(size, roster)
         r_final = _final_rotation_degrees(len(roster), winner_slot)
-        still = _compose_frame(base, pointer, r_final, badge)
+        overlay = _round_winner_overlay_layer(size, rnd_idx, winner_label)
+        still = _compose_frame(base, pointer, r_final, overlay)
 
         for _ in range(hold_count):
             all_frames.append(still.copy())
@@ -330,7 +370,7 @@ def _save_mp4(frames: list[Image.Image], fps: int) -> bytes:
 
 
 def render_multi_round_spin_media(
-    rounds: list[tuple[list[tuple[str, str, int]], int]],
+    rounds: list[tuple[list[tuple[str, str, int]], int, str]],
     *,
     size: int = 420,
     fps: int = 8,
@@ -355,7 +395,7 @@ def render_multi_round_spin_media(
 
 
 def render_multi_round_spin_gif(
-    rounds: list[tuple[list[tuple[str, str, int]], int]],
+    rounds: list[tuple[list[tuple[str, str, int]], int, str]],
     **kwargs: object,
 ) -> bytes:
     data, ext = render_multi_round_spin_media(rounds, **kwargs)  # type: ignore[arg-type]
@@ -371,7 +411,7 @@ def render_spin_gif(
     fps: int = 10,
 ) -> bytes:
     data, _ext = render_multi_round_spin_media(
-        [(roster, winner_slot)],
+        [(roster, winner_slot, str(roster[winner_slot][0] if 0 <= winner_slot < len(roster) else ""))],
         spin_sec=duration_sec,
         fps=fps,
         hold_sec=0.8,
