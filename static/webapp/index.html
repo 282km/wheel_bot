@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260210x" />
+    <link rel="stylesheet" href="./style.css?v=20260211b" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -123,7 +123,7 @@
 
           <div class="silent-wheel-wrap">
             <div class="silent-wheel-pointer">▼</div>
-            <div id="silent-wheel-disc" class="silent-wheel-disc">Добавьте участников и нажмите «Крутить колесо»</div>
+            <canvas id="silent-wheel-canvas" class="silent-wheel-canvas" aria-label="Колесо"></canvas>
           </div>
           <div id="silent-wheel-winner" class="silent-wheel-winner muted"></div>
           <div id="silent-wheel-results" class="list"></div>
@@ -198,6 +198,6 @@
       <p>Не удалось запустить WebApp. Откройте через кнопку в личке у бота.</p>
     </div>
 
-    <script src="./app.js?v=20260210x"></script>
+    <script src="./app.js?v=20260211b"></script>
   </body>
 </html>

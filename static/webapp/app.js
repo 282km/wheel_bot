@@ -13,6 +13,7 @@ let wiredDndZones = new WeakSet();
 let silentSpinRunning = false;
 let silentCurrentSessionId = null;
 let silentCurrentSegments = [];
+let silentWheelRotationDeg = 0;
 
 function getTg() {
   return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -141,10 +142,124 @@ function buildSilentSegments(roster) {
   });
 }
 
-function wheelNickShort(nick) {
-  const s = String(nick || "").trim();
-  if (s.length <= 8) return s;
-  return `${s.slice(0, 7)}…`;
+function silentCanvasCssSize() {
+  const wrap = $(".silent-wheel-wrap");
+  const w = wrap ? wrap.clientWidth : 560;
+  return Math.max(260, Math.min(560, w));
+}
+
+function ensureSilentCanvas() {
+  const canvas = $("#silent-wheel-canvas");
+  if (!canvas) return null;
+  const css = silentCanvasCssSize();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const px = Math.round(css * dpr);
+  if (canvas.width !== px || canvas.height !== px) {
+    canvas.width = px;
+    canvas.height = px;
+    canvas.style.width = `${css}px`;
+    canvas.style.height = `${css}px`;
+  }
+  return canvas;
+}
+
+function hslFromHue(h) {
+  return `hsl(${Number(h || 0)}, 62%, 48%)`;
+}
+
+function fitCanvasLabel(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxWidth) {
+    t = t.slice(0, -1);
+  }
+  return `${t}…`;
+}
+
+function setSilentWheelRotation(deg, animate) {
+  const canvas = $("#silent-wheel-canvas");
+  if (!canvas) return;
+  canvas.style.transition = animate ? "transform 5s cubic-bezier(0.11, 0.72, 0.2, 1)" : "none";
+  canvas.style.transform = `rotate(${deg}deg)`;
+}
+
+function drawSilentWheelCanvas(roster) {
+  const canvas = ensureSilentCanvas();
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const size = canvas.width;
+  const css = silentCanvasCssSize();
+  const scale = size / css;
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.clearRect(0, 0, css, css);
+
+  if (!roster || !roster.length) {
+    ctx.fillStyle = "#1a1e2a";
+    ctx.fillRect(0, 0, css, css);
+    ctx.fillStyle = "#d6def0";
+    ctx.font = `600 ${Math.max(13, Math.round(css / 28))}px system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Добавьте участников", css / 2, css / 2 - 10);
+    ctx.fillText("и нажмите «Крутить колесо»", css / 2, css / 2 + 12);
+    return;
+  }
+
+  const n = roster.length;
+  const cx = css / 2;
+  const cy = css / 2;
+  const pad = Math.max(10, css * 0.04);
+  const outerR = css / 2 - pad;
+  const step = (Math.PI * 2) / n;
+  const labelR = outerR * 0.55;
+  const fontSize = Math.max(9, Math.min(14, Math.round(css / (n >= 12 ? 34 : 30))));
+  ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+
+  for (let i = 0; i < n; i += 1) {
+    const start = -Math.PI / 2 + i * step;
+    const end = start + step;
+    const mid = start + step / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, outerR, start, end);
+    ctx.closePath();
+    ctx.fillStyle = roster[i].color || hslFromHue(roster[i].hue);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(20, 20, 20, 0.55)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+  }
+
+  for (let i = 0; i < n; i += 1) {
+    const start = -Math.PI / 2 + i * step;
+    const end = start + step;
+    const mid = start + step / 2;
+    const lx = cx + labelR * Math.cos(mid);
+    const ly = cy + labelR * Math.sin(mid);
+    const maxW = 2 * labelR * Math.sin(step / 2) * 0.9;
+    const label = fitCanvasLabel(ctx, String(roster[i].nick || ""), maxW);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, outerR, start, end);
+    ctx.closePath();
+    ctx.clip();
+    ctx.translate(lx, ly);
+    let rot = mid;
+    if (Math.cos(rot) < 0) rot += Math.PI;
+    ctx.rotate(rot);
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+    ctx.lineWidth = 3;
+    ctx.lineJoin = "round";
+    ctx.strokeText(label, 0, 0);
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+  }
 }
 
 function renderParticipants() {
@@ -529,69 +644,35 @@ function renderSilentResults(items) {
 }
 
 function paintSilentWheel(roster) {
-  const disc = $("#silent-wheel-disc");
-  if (!disc) return;
-  // Keep static preview aligned with legend colors.
-  disc.style.transition = "none";
-  disc.style.transform = "rotate(0deg)";
-  void disc.offsetWidth;
-  if (!roster || !roster.length) {
-    disc.style.background = "#1a1e2a";
-    disc.innerHTML = '<div class="silent-wheel-empty">Добавьте участников и нажмите «Крутить колесо»</div>';
-    return;
+  silentWheelRotationDeg = 0;
+  drawSilentWheelCanvas(roster);
+  const canvas = $("#silent-wheel-canvas");
+  if (canvas) {
+    setSilentWheelRotation(0, false);
+    void canvas.offsetWidth;
   }
-  const step = 360 / roster.length;
-  const chunks = [];
-  for (let i = 0; i < roster.length; i += 1) {
-    const s = i * step;
-    const e = (i + 1) * step;
-    chunks.push(`${roster[i].color || wheelPaletteByHue(roster[i].hue)} ${s}deg ${e}deg`);
-  }
-  const labels = roster
-    .map((p, i) => {
-      const angDeg = (i + 0.5) * step - 90;
-      const ang = (angDeg * Math.PI) / 180;
-      const radius = roster.length >= 12 ? 36 : roster.length >= 9 ? 38 : 40;
-      const x = 50 + Math.cos(ang) * radius;
-      const y = 50 + Math.sin(ang) * radius;
-      // Align text along the slice axis.
-      let textRotate = angDeg;
-      if (textRotate > 90) textRotate -= 180;
-      if (textRotate < -90) textRotate += 180;
-      const halfStepRad = (Math.PI / 180) * (step / 2);
-      const chordPct = Math.max(7, Math.min(16, 2 * radius * Math.sin(halfStepRad) * 0.72));
-      const fontPx = roster.length >= 12 ? 7 : roster.length >= 9 ? 8 : 9;
-      return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;max-width:${chordPct.toFixed(
-        1
-      )}%;font-size:${fontPx}px;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(
-        wheelNickShort(p.nick)
-      )}</div>`;
-    })
-    .join("");
-  disc.innerHTML = `<div class="silent-wheel-labels">${labels}</div>`;
-  disc.style.background = `conic-gradient(from -90deg, ${chunks.join(", ")})`;
 }
 
 async function animateSilentRound(round) {
-  const disc = $("#silent-wheel-disc");
+  const canvas = ensureSilentCanvas();
   const winnerLine = $("#silent-wheel-winner");
-  if (!disc || !winnerLine) return;
+  if (!canvas || !winnerLine) return;
   const baseRoster = round.roster || [];
   const roster = buildSilentSegments(baseRoster);
   silentCurrentSegments = roster;
   const winnerIdx = roster.findIndex((x) => Number(x.id) === Number(round.winner_id));
   if (!roster.length || winnerIdx < 0) return;
-  paintSilentWheel(roster);
+
   const seg = 360 / roster.length;
   const stopDeg = -((winnerIdx + 0.5) * seg);
-  const extraTurns = 360 * 7;
-  const total = extraTurns + stopDeg;
-  disc.style.transition = "none";
-  disc.style.transform = "rotate(0deg)";
-  // force style flush
-  void disc.offsetWidth;
-  disc.style.transition = "transform 5s cubic-bezier(0.11, 0.72, 0.2, 1)";
-  disc.style.transform = `rotate(${total}deg)`;
+  const total = 360 * 7 + stopDeg;
+
+  drawSilentWheelCanvas(roster);
+  setSilentWheelRotation(0, false);
+  void canvas.offsetWidth;
+  silentWheelRotationDeg = total;
+  setSilentWheelRotation(total, true);
+
   winnerLine.textContent = `Раунд ${round.round}: крутится...`;
   await sleep(5000);
   winnerLine.innerHTML = `Раунд ${round.round}: <strong>${escapeHtml(round.winner_nick)}</strong> — ${fmtMoney(
