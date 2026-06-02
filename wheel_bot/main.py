@@ -15,17 +15,29 @@ from wheel_bot.db import bootstrap_users, connect
 
 async def run() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    log = logging.getLogger("wheel_bot")
 
-    settings = load_settings()
-    conn = await connect(settings.database_path)
-    await bootstrap_users(conn, settings.superadmin_ids)
+    try:
+        settings = load_settings()
+    except Exception:
+        log.exception("Failed to load settings (.env)")
+        raise
 
-    bot = Bot(settings.bot_token)
-    dp = Dispatcher()
-    dp.include_router(setup_router(settings, conn))
+    try:
+        conn = await connect(settings.database_path)
+        await bootstrap_users(conn, settings.superadmin_ids)
 
-    db_lock = asyncio.Lock()
-    app = create_app(settings, conn, bot, dp, db_lock)
+        bot = Bot(settings.bot_token)
+        dp = Dispatcher()
+        dp.include_router(setup_router(settings, conn))
+
+        db_lock = asyncio.Lock()
+        app = create_app(settings, conn, bot, dp, db_lock)
+    except Exception:
+        log.exception("Failed to initialize database or Telegram app")
+        raise
+
+    log.info("Wheel bot starting on %s:%s", settings.http_host, settings.http_port)
 
     uv_kwargs: dict[str, Any] = {
         "app": app,

@@ -57,6 +57,28 @@ def _text_bbox(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) 
     return float(bb[2] - bb[0]), float(bb[3] - bb[1])
 
 
+def _draw_text_stroked(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[float, float],
+    text: str,
+    font: ImageFont.ImageFont,
+    *,
+    fill: tuple[int, int, int, int] = (255, 255, 255, 255),
+    stroke_width: int = 2,
+) -> None:
+    try:
+        draw.text(
+            xy,
+            text,
+            fill=fill,
+            font=font,
+            stroke_width=stroke_width,
+            stroke_fill=(0, 0, 0, 230),
+        )
+    except Exception:
+        draw.text(xy, text, fill=fill, font=font)
+
+
 def _pillow_xy(cx: float, cy: float, radius: float, deg_cw: float) -> tuple[float, float]:
     """Pillow angles: 0° = 3 o'clock, clockwise."""
     rad = math.radians(deg_cw)
@@ -106,13 +128,12 @@ def _paste_radial_label(
     box = int(max(tw + pad * 2, th + pad * 2, 24))
     txt = Image.new("RGBA", (box, box), (0, 0, 0, 0))
     tdraw = ImageDraw.Draw(txt)
-    tdraw.text(
+    _draw_text_stroked(
+        tdraw,
         (box / 2 - tw / 2, box / 2 - th / 2),
         label,
-        fill=(255, 255, 255, 255),
-        font=font,
+        font,
         stroke_width=max(1, size // 140),
-        stroke_fill=(0, 0, 0, 230),
     )
 
     rot_deg = math.degrees(mid_rad)
