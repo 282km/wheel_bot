@@ -28,15 +28,17 @@ async def run() -> None:
         conn = await connect(settings.database_path)
         await bootstrap_users(conn, settings.superadmin_ids)
 
-        from wheel_bot.destinations import log_effective_destinations
+        try:
+            from wheel_bot.destinations import log_effective_destinations
 
-        await log_effective_destinations(conn, settings)
+            await log_effective_destinations(conn, settings)
+        except Exception:
+            log.exception("Destination log skipped (check wheel_bot/destinations.py)")
 
+        db_lock = asyncio.Lock()
         bot = Bot(settings.bot_token)
         dp = Dispatcher()
         dp.include_router(setup_router(settings, conn, db_lock))
-
-        db_lock = asyncio.Lock()
         app = create_app(settings, conn, bot, dp, db_lock)
     except Exception:
         log.exception("Failed to initialize database or Telegram app")
