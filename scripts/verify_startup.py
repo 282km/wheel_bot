@@ -9,9 +9,16 @@ import traceback
 def main() -> int:
     print("Python:", sys.version.split()[0])
     try:
-        from wheel_bot import config, db, spin_service  # noqa: F401
+        from wheel_bot.config import _PROJECT_ROOT, load_settings
+        from wheel_bot import db, spin_service  # noqa: F401
         from wheel_bot.api import create_app  # noqa: F401
         from wheel_bot.render_wheel import render_multi_round_spin_media  # noqa: F401
+
+        print("Project root:", _PROJECT_ROOT)
+        print("Env file:", _PROJECT_ROOT / ".env", "exists:", (_PROJECT_ROOT / ".env").is_file())
+        settings = load_settings()
+        print("TARGET_CHAT_ID:", settings.target_chat_id)
+        print("PUBLIC_BASE_URL:", settings.public_base_url)
 
         roster = [("Alice", "", 0), ("Bob", "", 120), ("Carol", "", 240)]
         data, ext = render_multi_round_spin_media([(roster, 1, "Bob")], spin_sec=0.5, hold_sec=0.3)

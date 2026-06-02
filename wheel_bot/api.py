@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 import aiosqlite
@@ -62,6 +63,8 @@ def create_app(
     dp: Dispatcher,
     db_lock: asyncio.Lock,
 ) -> Starlette:
+    webhook_log = logging.getLogger("wheel_bot.webhook")
+
     async def session_route(request: Request) -> Response:
         try:
             body = _json_body(await request.body())
@@ -181,6 +184,14 @@ def create_app(
             visible_ids = {r.id for r in rows}
             selected = [pid for pid in selected if pid in visible_ids]
             last = [pid for pid in last if pid in visible_ids]
+            stats_chat_id = await get_effective_stats_chat_id(conn, settings)
+            open_silent = await db.get_open_silent_session(conn, stats_chat_id)
+            silent_flow = None
+            if open_silent:
+                silent_flow = {
+                    "session_id": int(open_silent["id"]),
+                    "phase": "spun" if open_silent["has_winners"] else "announced",
+                }
             return JSONResponse(
                 {
                     "selected_ids": selected,
@@ -188,6 +199,7 @@ def create_app(
                     "participants": [
                         {"id": r.id, "poker_nick": r.poker_nick, "description": r.description} for r in rows
                     ],
+                    "silent_flow": silent_flow,
                 }
             )
         except Exception as e:
@@ -488,6 +500,9 @@ def create_app(
                         channel_chat_id = None
                     else:
                         channel_chat_id = int(ch_raw)
+                from wheel_bot.destinations import validate_destination_ids
+
+                validate_destination_ids(stats_chat_id, channel_chat_id)
                 await set_configured_chat_ids(conn, stats_chat_id, channel_chat_id)
             target = await get_wheel_post_target(conn)
             return JSONResponse(await wheel_post_settings_payload(conn, settings, target))
@@ -543,10 +558,19 @@ def create_app(
         try:
             body = _json_body(await request.body()) or {}
             update = Update.model_validate(body)
+            msg = update.message or update.edited_message
+            if msg and msg.text and ("stat" in msg.text.lower() or "статистик" in msg.text.lower() or "/chatid" in msg.text.lower()):
+                webhook_log.info(
+                    "telegram update chat_id=%s type=%s text=%r",
+                    msg.chat.id,
+                    msg.chat.type,
+                    msg.text[:120],
+                )
             await dp.feed_update(bot, update)
             return Response(status_code=200)
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception:
+            webhook_log.exception("feed_update failed")
+            return Response(status_code=200)
 
     routes = [
         Route("/health", health, methods=["GET"]),

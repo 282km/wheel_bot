@@ -28,9 +28,13 @@ async def run() -> None:
         conn = await connect(settings.database_path)
         await bootstrap_users(conn, settings.superadmin_ids)
 
+        from wheel_bot.destinations import log_effective_destinations
+
+        await log_effective_destinations(conn, settings)
+
         bot = Bot(settings.bot_token)
         dp = Dispatcher()
-        dp.include_router(setup_router(settings, conn))
+        dp.include_router(setup_router(settings, conn, db_lock))
 
         db_lock = asyncio.Lock()
         app = create_app(settings, conn, bot, dp, db_lock)
@@ -55,11 +59,21 @@ async def run() -> None:
         uv_kwargs["ssl_keyfile"] = settings.ssl_keyfile
 
     webhook_url = f"{settings.public_base_url.rstrip('/')}{settings.webhook_path}"
+    allowed_updates = sorted(
+        {
+            *dp.resolve_used_update_types(),
+            "message",
+            "edited_message",
+            "callback_query",
+            "my_chat_member",
+        }
+    )
     await bot.set_webhook(
         url=webhook_url,
         secret_token=settings.webhook_secret,
-        allowed_updates=dp.resolve_used_update_types(),
+        allowed_updates=allowed_updates,
     )
+    log.info("Webhook allowed_updates: %s", allowed_updates)
     try:
         await bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(

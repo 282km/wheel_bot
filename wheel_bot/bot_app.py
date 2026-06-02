@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 import aiosqlite
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -104,6 +106,22 @@ def _format_stats_block(data: dict[str, Any]) -> str:
     return text[:3899] + "…"
 
 
+def _first_command_token(text: str) -> str:
+    return text.strip().split(maxsplit=1)[0].split("@")[0].lower()
+
+
+def _is_stat_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/stat"
+
+
+def _is_chatid_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/chatid"
+
+
 def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -117,10 +135,37 @@ def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     )
 
 
-def setup_router(settings: Settings, conn: aiosqlite.Connection) -> Router:
+def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asyncio.Lock) -> Router:
     router = Router(name="wheel")
+    log = logging.getLogger("wheel_bot.bot")
 
+    from wheel_bot.destinations import read_destination_config
     from wheel_bot.posting import get_effective_stats_chat_id
+
+    async def _configured_stats_chat_id() -> int:
+        async with db_lock:
+            return await get_effective_stats_chat_id(conn, settings)
+
+    async def _stats_chat_mismatch_reply(message: Message, target_id: int) -> bool:
+        chat_id = int(message.chat.id)
+        if chat_id == int(target_id):
+            return False
+        log.warning("/stat: chat_id=%s configured_stats_chat=%s", chat_id, target_id)
+        hint = (
+            "⚠️ Статистика для этого бота привязана к другому чату.\n\n"
+            f"ID этого чата: `{chat_id}`\n"
+            f"В настройках бота: `{target_id}`\n\n"
+            "Укажите правильный ID во вкладке «Админ» WebApp (поле «ID чата») "
+            "или в `TARGET_CHAT_ID` в `.env` на сервере, затем перезапустите бота.\n\n"
+            "Для проверки ID админ может написать здесь: /chatid"
+        )
+        try:
+            await message.answer(hint, parse_mode="Markdown")
+        except TelegramBadRequest:
+            await message.answer(
+                hint.replace("`", ""),
+            )
+        return True
 
     @router.message(Command("start"))
     async def cmd_start(message: Message) -> None:
@@ -163,37 +208,98 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection) -> Router:
     async def _stats_prompt(message: Message) -> None:
         await message.answer("Выберите период для статистики:", reply_markup=_period_keyboard())
 
-    @router.message(Command("stat"))
+    @router.message(lambda message: _is_chatid_command(message))
+    async def cmd_chatid(message: Message) -> None:
+        """Помощник настройки: показать id чата и сверку с конфигом (только админы)."""
+        try:
+            if message.chat.type == "private":
+                uid = message.from_user.id if message.from_user else message.chat.id
+                await message.answer(f"Ваш Telegram user id: {uid}")
+                return
+            tg_id = message.from_user.id if message.from_user else 0
+            async with db_lock:
+                role = await db.ensure_user(conn, tg_id)
+            if role not in ("admin", "superadmin"):
+                await message.answer("Команда /chatid только для админов бота.")
+                return
+            async with db_lock:
+                cfg = await read_destination_config(conn, settings)
+            target_id = int(cfg["stats_chat_id"])
+            chat_id = int(message.chat.id)
+            channel_id = cfg["channel_chat_id"]
+            post_chat_id = cfg["post_chat_id"]
+            match = "✅ совпадает — /stat здесь" if chat_id == target_id else "❌ не совпадает — /stat здесь не сработает"
+            ch_line = f"`{channel_id}`" if channel_id is not None else "не задан"
+            text = (
+                f"ID этого чата: `{chat_id}`\n"
+                f"Тип: {message.chat.type}\n\n"
+                f"Чат для /stat и БД: `{target_id}`\n"
+                f"Канал для постов колеса: {ch_line}\n"
+                f"Сейчас посты уходят в: `{post_chat_id}` (режим {cfg['post_target']})\n\n"
+                f"{match}\n\n"
+                f"Ожидаемо: чат -1003927403776, канал -1003950795686"
+            )
+            try:
+                await message.answer(text, parse_mode="Markdown")
+            except TelegramBadRequest:
+                await message.answer(text.replace("`", ""))
+        except TelegramForbiddenError:
+            log.warning("chatid: no send permission in chat %s", message.chat.id)
+        except Exception:
+            log.exception("chatid handler failed")
+
+    async def _handle_stat(message: Message) -> None:
+        try:
+            if message.chat.type == "channel":
+                await message.answer(
+                    "Команда /stat работает в группе (супергруппе), не в канале. "
+                    "Вызовите её в чате, где собирается статистика."
+                )
+                return
+            target_id = await _configured_stats_chat_id()
+            chat_id = int(message.chat.id)
+            log.info("stat: chat_id=%s target_id=%s type=%s text=%r", chat_id, target_id, message.chat.type, message.text)
+            if await _stats_chat_mismatch_reply(message, target_id):
+                return
+            await _stats_prompt(message)
+        except TelegramForbiddenError:
+            log.warning("stat: bot cannot send messages in chat %s", message.chat.id)
+        except Exception:
+            log.exception("stat handler failed for chat %s", message.chat.id)
+            try:
+                await message.answer("Ошибка при открытии статистики. Проверьте логи wheel-bot на сервере.")
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_stat_command(message))
     async def stats_cmd(message: Message) -> None:
-        target_id = await get_effective_stats_chat_id(conn, settings)
-        if message.chat.id != target_id:
-            return
-        await _stats_prompt(message)
+        await _handle_stat(message)
 
     @router.message(F.text.lower() == "статистика")
     async def stats_text(message: Message) -> None:
-        target_id = await get_effective_stats_chat_id(conn, settings)
-        if message.chat.id != target_id:
-            return
-        await _stats_prompt(message)
+        await _handle_stat(message)
 
     @router.callback_query(F.data.startswith("stats:"))
     async def stats_answer(cb: CallbackQuery) -> None:
-        target_id = await get_effective_stats_chat_id(conn, settings)
-        if not cb.message or cb.message.chat.id != target_id:
+        target_id = await _configured_stats_chat_id()
+        if not cb.message or int(cb.message.chat.id) != int(target_id):
             await cb.answer()
             return
         key = cb.data.split(":", 1)[1]
         if key not in PERIOD_LABELS:
             await cb.answer("Неизвестный период", show_alert=True)
             return
-        data = await stats_summary(conn, target_id, key)
-        text = _format_stats_block(data)
         try:
-            await cb.message.edit_text(text, reply_markup=_period_keyboard())
-        except TelegramBadRequest:
-            # Fallback for cases when Telegram refuses edit in channel/group context.
-            await cb.message.answer(text, reply_markup=_period_keyboard())
-        await cb.answer()
+            async with db_lock:
+                data = await stats_summary(conn, target_id, key)
+            text = _format_stats_block(data)
+            try:
+                await cb.message.edit_text(text, reply_markup=_period_keyboard())
+            except TelegramBadRequest:
+                await cb.message.answer(text, reply_markup=_period_keyboard())
+            await cb.answer()
+        except Exception:
+            log.exception("stats callback failed")
+            await cb.answer("Ошибка статистики", show_alert=True)
 
     return router
