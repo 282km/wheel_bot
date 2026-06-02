@@ -7,7 +7,9 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Всегда читаем .env из корня репозитория (не зависит от cwd systemd).
+load_dotenv(_PROJECT_ROOT / ".env")
 
 
 def _parse_ids(raw: Optional[str]) -> set[int]:
@@ -46,7 +48,7 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    root = Path(__file__).resolve().parent.parent
+    root = _PROJECT_ROOT
     static_dir = root / "static"
     db_path = Path(os.getenv("DATABASE_PATH", str(root / "data" / "app.db"))).expanduser()
 

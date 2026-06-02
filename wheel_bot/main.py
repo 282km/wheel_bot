@@ -38,6 +38,7 @@ async def run() -> None:
         raise
 
     log.info("Wheel bot starting on %s:%s", settings.http_host, settings.http_port)
+    log.info("TARGET_CHAT_ID=%s", settings.target_chat_id)
 
     uv_kwargs: dict[str, Any] = {
         "app": app,
