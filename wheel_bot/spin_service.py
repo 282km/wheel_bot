@@ -323,6 +323,12 @@ async def send_silent_results(
         raise ValueError("Результаты этого колеса уже отправлены в чат")
 
     winners = await db.list_session_winners(conn, session_id)
+    if not winners:
+        raise ValueError(
+            f"У колеса #{session_id} нет победителей. "
+            "Сначала прокрутите колесо в режиме тишины, затем отправляйте результаты. "
+            "(Анонс в чат создаёт запись колеса без победителей.)"
+        )
     depositor = await db.get_participant(conn, int(session["depositor_id"]))
     depositor_label = (
         _participant_label(depositor.poker_nick, depositor.description) if depositor else str(session["depositor_id"])

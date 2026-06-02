@@ -11,7 +11,8 @@ let editingParticipantId = null;
 let historyItemsCache = [];
 let wiredDndZones = new WeakSet();
 let silentSpinRunning = false;
-let silentCurrentSessionId = null;
+let silentAnnounceSessionId = null;
+let silentSpunSessionId = null;
 let silentCurrentSegments = [];
 let silentWheelRotationDeg = 0;
 let silentColorById = new Map();
@@ -204,6 +205,19 @@ function buildSilentSegments(roster) {
       color: wheelPaletteByHue(hue),
     };
   });
+}
+
+function updateSilentSessionStatus() {
+  const el = $("#silent-session-status");
+  if (!el) return;
+  const parts = [];
+  if (silentAnnounceSessionId) {
+    parts.push(`анонс: колесо #${silentAnnounceSessionId}`);
+  }
+  if (silentSpunSessionId) {
+    parts.push(`кручение: колесо #${silentSpunSessionId}`);
+  }
+  el.textContent = parts.length ? parts.join(" · ") : "";
 }
 
 function hideSilentCenterOverlay() {
@@ -1104,7 +1118,7 @@ async function boot() {
             deposit_amount,
             prizes: prizesRaw,
             selected_ids: selectedIds,
-            session_id: silentCurrentSessionId,
+            session_id: silentAnnounceSessionId,
           }),
         });
         const rounds = Array.isArray(res.rounds) ? res.rounds : [];
@@ -1112,9 +1126,13 @@ async function boot() {
           await animateSilentRound(round);
         }
         renderSilentResults(rounds);
-        silentCurrentSessionId = Number(res.session_id || 0) || null;
-        if (winnerLine) winnerLine.textContent = "Кручение завершено. Проверьте победителей и отправьте результаты в чат.";
-        if (sendBtn) sendBtn.disabled = !silentCurrentSessionId;
+        silentSpunSessionId = Number(res.session_id || 0) || null;
+        silentAnnounceSessionId = silentSpunSessionId;
+        updateSilentSessionStatus();
+        if (winnerLine) {
+          winnerLine.textContent = `Кручение завершено (колесо #${silentSpunSessionId}). Можно отправить результаты в чат.`;
+        }
+        if (sendBtn) sendBtn.disabled = !silentSpunSessionId;
         log.textContent = JSON.stringify({ session_id: res.session_id, rounds: rounds.length }, null, 2);
       } catch (err) {
         log.textContent = String(err.message || err);
@@ -1128,17 +1146,19 @@ async function boot() {
   const sendSilentResultsBtn = $("#silent-send-results");
   if (sendSilentResultsBtn) {
     sendSilentResultsBtn.addEventListener("click", async () => {
-      if (!silentCurrentSessionId) {
-        tgAlert("Сначала выполните кручение в режиме тишины.");
+      if (!silentSpunSessionId) {
+        tgAlert("Сначала нажмите «Крутить колесо». Анонс сам по себе не создаёт победителей.");
         return;
       }
       try {
         await api("/api/wheel/silent-send-results", {
           method: "POST",
-          body: JSON.stringify({ session_id: silentCurrentSessionId }),
+          body: JSON.stringify({ session_id: silentSpunSessionId }),
         });
-        tgAlert("Результаты отправлены в чат.");
+        tgAlert(`Результаты колеса #${silentSpunSessionId} отправлены в чат.`);
         sendSilentResultsBtn.disabled = true;
+        silentSpunSessionId = null;
+        updateSilentSessionStatus();
       } catch (err) {
         tgAlert(String(err.message || err));
       }
@@ -1165,8 +1185,14 @@ async function boot() {
             selected_ids: selectedIds,
           }),
         });
-        silentCurrentSessionId = Number(res.session_id || 0) || null;
-        tgAlert("Анонс отправлен в чат.");
+        silentAnnounceSessionId = Number(res.session_id || 0) || null;
+        silentSpunSessionId = null;
+        updateSilentSessionStatus();
+        const sendBtn = $("#silent-send-results");
+        if (sendBtn) sendBtn.disabled = true;
+        tgAlert(
+          `Анонс отправлен (колесо #${silentAnnounceSessionId}). Теперь нажмите «Крутить колесо», затем «Отправить результаты».`
+        );
       } catch (err) {
         tgAlert(String(err.message || err));
       }
