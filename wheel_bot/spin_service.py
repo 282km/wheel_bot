@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-from typing import Any
+from typing import Any, Optional
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
@@ -165,7 +165,7 @@ async def run_wheel_spin_silent(
     deposit_amount: float,
     selected_ids: list[int],
     prizes: list[float],
-    session_id: int | None = None,
+    session_id: Optional[int] = None,
 ) -> dict[str, Any]:
     roster_ids, roster_rows, templates, depositor_label, prize_pool = await _prepare_spin_data(
         conn, admin_telegram_id, depositor_id, deposit_amount, selected_ids, prizes
