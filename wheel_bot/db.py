@@ -482,3 +482,33 @@ async def set_message_templates(conn: aiosqlite.Connection, templates: dict[str,
 async def reset_message_templates(conn: aiosqlite.Connection) -> None:
     for key, value in MESSAGE_TEMPLATE_DEFAULTS.items():
         await set_kv(conn, f"msg_tpl_{key}", value)
+
+
+async def reset_all_wheel_data(conn: aiosqlite.Connection) -> dict[str, int]:
+    """
+    Полный сброс данных колеса: участники, история, драфт, шаблоны в app_kv.
+    Таблица users (роли admin/superadmin) не трогается.
+    """
+    stats: dict[str, int] = {}
+
+    async def _count(table: str) -> int:
+        row = await (await conn.execute(f"SELECT COUNT(*) AS c FROM {table}")).fetchone()
+        return int(row["c"])
+
+    stats["participants"] = await _count("participants")
+    stats["wheel_sessions"] = await _count("wheel_sessions")
+    stats["wheel_spins"] = await _count("wheel_spins")
+    stats["wheel_session_roster"] = await _count("wheel_session_roster")
+    kv_row = await (await conn.execute("SELECT COUNT(*) AS c FROM app_kv")).fetchone()
+    stats["app_kv"] = int(kv_row["c"])
+
+    await conn.execute("DELETE FROM wheel_spins")
+    await conn.execute("DELETE FROM wheel_session_roster")
+    await conn.execute("DELETE FROM wheel_sessions")
+    await conn.execute("DELETE FROM participants")
+    await conn.execute("DELETE FROM app_kv")
+    await conn.execute(
+        "DELETE FROM sqlite_sequence WHERE name IN ('participants', 'wheel_sessions', 'wheel_spins')"
+    )
+    await conn.commit()
+    return stats
