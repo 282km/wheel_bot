@@ -7,6 +7,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+_WHEEL_BG = (26, 30, 42, 255)
+_RING = (47, 54, 71, 255)
+
 
 def _ease_out_cubic(t: float) -> float:
     return 1 - pow(1 - t, 3)
@@ -19,19 +22,18 @@ def _cut(s: str, max_len: int) -> str:
     return s[: max_len - 1] + "…"
 
 
-def _label_lines_for_sector(nick: str, desc: str) -> tuple[str, str]:
-    nick_line = _cut(nick, 14)
-    if desc.strip():
-        desc_line = _cut(f"({desc.strip()})", 16)
-    else:
-        desc_line = ""
-    return nick_line, desc_line
+def _hue_to_rgb(hue_deg: int) -> tuple[int, int, int]:
+    h = (int(hue_deg) % 360) / 360.0
+    r, g, b = hls_to_rgb(h, 0.48, 0.70)
+    return int(r * 255), int(g * 255), int(b * 255)
 
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+        Path("C:/Windows/Fonts/arialbd.ttf"),
         Path("C:/Windows/Fonts/arial.ttf"),
     ]
     for fp in candidates:
@@ -43,56 +45,84 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def _text_bbox(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[float, float]:
+    bb = draw.textbbox((0, 0), text, font=font)
+    return float(bb[2] - bb[0]), float(bb[3] - bb[1])
+
+
 def _wheel_layer(size: int, roster: list[tuple[str, str, int]]) -> Image.Image:
     """
     roster entries: (nick, description, hue_degrees)
+    Sectors start at 12 o'clock, clockwise.
     """
     n = len(roster)
     if n < 2:
         raise ValueError("need at least 2 sectors")
 
-    img = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+    img = Image.new("RGBA", (size, size), _WHEEL_BG)
     draw = ImageDraw.Draw(img)
     cx = cy = size // 2
-    pad = max(8, size // 40)
+    pad = max(8, size // 32)
+    outer_r = size // 2 - pad
     bbox = (pad, pad, size - pad, size - pad)
-
-    font = _load_font(max(12, size // 30))
+    step_deg = 360.0 / n
+    label_r = outer_r * 0.6
+    max_font = max(10, min(17, int(size / (7 + n * 0.45))))
+    min_font = max(8, max_font - 6)
+    font = _load_font(max_font)
 
     for i in range(n):
-        nick, desc, hue = roster[i]
-        start = i * (360.0 / n)
-        end = (i + 1) * (360.0 / n)
-        r, g, b = hls_to_rgb((hue % 360) / 360.0, 0.62, 0.95)
-        fill = (int(r * 255), int(g * 255), int(b * 255))
-        draw.pieslice(bbox, start, end, fill=fill, outline=(40, 40, 40))
+        nick, _desc, hue = roster[i]
+        start = -90.0 + i * step_deg
+        end = start + step_deg
+        fill = _hue_to_rgb(hue)
+        draw.pieslice(bbox, start, end, fill=fill, outline=(20, 20, 20))
 
-        mid = (i + 0.5) * (360.0 / n)
-        rad = math.radians(mid)
-        tr = (size // 2 - pad) * 0.52
-        tx = cx + tr * math.cos(rad)
-        # Pillow arcs on image coordinates (Y grows downward), so plus sin places labels
-        # into the same visual sector as pieslice angles.
-        ty = cy + tr * math.sin(rad)
+    draw.ellipse(bbox, outline=_RING, width=max(2, size // 128))
 
-        line1, line2 = _label_lines_for_sector(nick, desc)
-        text = line1 if not line2 else f"{line1}\n{line2}"
-        tw, th = _text_bbox(draw, text, font)
-        draw.multiline_text(
-            (tx - tw / 2, ty - th / 2),
-            text,
-            fill=(10, 10, 10),
+    for i in range(n):
+        nick, _desc, _hue = roster[i]
+        start = -90.0 + i * step_deg
+        end = start + step_deg
+        mid_rad = math.radians(-90.0 + (i + 0.5) * step_deg)
+        lx = cx + label_r * math.cos(mid_rad)
+        ly = cy + label_r * math.sin(mid_rad)
+        max_w = 2 * label_r * math.sin(math.radians(step_deg / 2)) * 0.96
+        label = _cut(nick, 18)
+
+        font_size = max_font
+        tw, th = 0.0, 0.0
+        while font_size >= min_font:
+            font = _load_font(font_size)
+            tw, th = _text_bbox(draw, label, font)
+            if tw <= max_w:
+                break
+            font_size -= 1
+        if tw > max_w:
+            while len(label) > 1:
+                label = label[:-1]
+                tw, th = _text_bbox(draw, f"{label}…", font)
+                if tw <= max_w:
+                    label = f"{label}…"
+                    break
+
+        txt_layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        tdraw = ImageDraw.Draw(txt_layer)
+        tdraw.text(
+            (lx - tw / 2, ly - th / 2),
+            label,
+            fill=(255, 255, 255, 255),
             font=font,
-            align="center",
-            spacing=1,
+            stroke_width=max(1, size // 160),
+            stroke_fill=(0, 0, 0, 220),
         )
 
+        sector_mask = Image.new("L", (size, size), 0)
+        smask = ImageDraw.Draw(sector_mask)
+        smask.pieslice(bbox, start, end, fill=255)
+        img = Image.composite(txt_layer, img, sector_mask)
+
     return img
-
-
-def _text_bbox(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[float, float]:
-    bb = draw.multiline_textbbox((0, 0), text, font=font, spacing=1)
-    return float(bb[2] - bb[0]), float(bb[3] - bb[1])
 
 
 def _pointer_layer(size: int) -> Image.Image:
@@ -102,60 +132,139 @@ def _pointer_layer(size: int) -> Image.Image:
     top = max(6, size // 48)
     w = max(10, size // 28)
     pts = [(cx, top), (cx - w, top + w * 2), (cx + w, top + w * 2)]
-    draw.polygon(pts, fill=(220, 20, 20), outline=(60, 0, 0))
+    draw.polygon(pts, fill=(255, 209, 102, 255), outline=(120, 80, 0))
     return img
 
 
-def render_spin_gif(roster: list[tuple[str, str, int]], winner_slot: int, duration_sec: float = 3.0, fps: int = 10) -> bytes:
-    """
-    roster order matches sectors 0..N-1 starting from 3 o'clock.
-    winner_slot: index in roster for winning sector.
-    """
+def _round_badge_layer(size: int, round_no: int) -> Image.Image:
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    text = f"Раунд {round_no}"
+    font = _load_font(max(14, size // 24))
+    tw, th = _text_bbox(draw, text, font)
+    pad_x = max(8, size // 40)
+    pad_y = max(4, size // 80)
+    x0 = (size - tw) / 2 - pad_x
+    y0 = size - th - pad_y * 3
+    x1 = (size + tw) / 2 + pad_x
+    y1 = size - pad_y
+    draw.rounded_rectangle((x0, y0, x1, y1), radius=8, fill=(15, 18, 28, 210))
+    draw.text((size / 2 - tw / 2, y0 + pad_y), text, fill=(255, 255, 255, 255), font=font)
+    return img
+
+
+def _final_rotation_degrees(n: int, winner_slot: int, extra_turns: int = 5) -> float:
+    step = 360.0 / n
+    mid_w = -90.0 + (winner_slot + 0.5) * step
+    target = 270.0
+    return extra_turns * 360.0 + ((mid_w - target) % 360.0)
+
+
+def _compose_frame(base: Image.Image, pointer: Image.Image, angle_deg: float, badge: Image.Image | None = None) -> Image.Image:
+    rotated = base.rotate(angle_deg, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=_WHEEL_BG)
+    composed = Image.alpha_composite(rotated, pointer)
+    if badge is not None:
+        composed = Image.alpha_composite(composed, badge)
+    return composed.convert("RGB")
+
+
+def _round_spin_frames(
+    roster: list[tuple[str, str, int]],
+    winner_slot: int,
+    *,
+    size: int = 384,
+    fps: int = 8,
+    spin_sec: float = 2.0,
+) -> list[Image.Image]:
     n = len(roster)
     if n < 2:
         raise ValueError("need at least 2 sectors")
     if winner_slot < 0 or winner_slot >= n:
         raise ValueError("bad winner_slot")
 
-    size = 384
-    frames = max(18, min(36, int(duration_sec * fps)))
-    frame_duration_ms = int(round(1000 * duration_sec / max(1, frames - 1)))
-
+    frame_count = max(14, min(28, int(spin_sec * fps)))
     base = _wheel_layer(size, roster)
     pointer = _pointer_layer(size)
+    r_final = _final_rotation_degrees(n, winner_slot)
 
-    sector_angle = 360.0 / n
-    center_w = (winner_slot + 0.5) * sector_angle
-    # Pointer is at 12 o'clock (270° in Pillow angle system). Since image
-    # rotation direction is opposite to sector angle growth in our drawing
-    # coordinates, use reversed delta.
-    target_angle = 270.0
-    extra_turns = 5
-    r_final = extra_turns * 360.0 + ((center_w - target_angle) % 360.0)
-
-    imgs: list[Image.Image] = []
-    for i in range(frames):
-        t = i / max(1, frames - 1)
+    frames: list[Image.Image] = []
+    for i in range(frame_count):
+        t = i / max(1, frame_count - 1)
         ang = _ease_out_cubic(t) * r_final
-        rotated = base.rotate(ang, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=(255, 255, 255, 255))
-        composed = Image.alpha_composite(rotated, pointer)
-        imgs.append(composed.convert("RGB"))
+        frames.append(_compose_frame(base, pointer, ang))
+    return frames
 
+
+def _save_gif(frames: list[Image.Image], fps: int) -> bytes:
+    if not frames:
+        raise ValueError("no frames")
+    duration_ms = int(round(1000 / max(1, fps)))
+    out_frames: list[Image.Image] = frames
     try:
-        pal = imgs[0].quantize(colors=96)
-        quantized = [pal] + [im.quantize(palette=pal) for im in imgs[1:]]
-        frames = quantized
+        pal_img = frames[0].quantize(colors=64, method=Image.Quantize.MEDIANCUT)
+        out_frames = [pal_img] + [im.quantize(palette=pal_img) for im in frames[1:]]
     except Exception:
-        frames = imgs
+        out_frames = frames
 
     buf = io.BytesIO()
-    frames[0].save(
+    out_frames[0].save(
         buf,
         format="GIF",
         save_all=True,
-        append_images=frames[1:],
-        duration=frame_duration_ms,
+        append_images=out_frames[1:],
+        duration=duration_ms,
         loop=0,
         optimize=True,
     )
     return buf.getvalue()
+
+
+def render_spin_gif(
+    roster: list[tuple[str, str, int]],
+    winner_slot: int,
+    duration_sec: float = 3.0,
+    fps: int = 10,
+) -> bytes:
+    """Single-round GIF (kept for compatibility)."""
+    frames = _round_spin_frames(roster, winner_slot, size=384, fps=fps, spin_sec=duration_sec)
+    return _save_gif(frames, fps)
+
+
+def render_multi_round_spin_gif(
+    rounds: list[tuple[list[tuple[str, str, int]], int]],
+    *,
+    size: int = 384,
+    fps: int = 8,
+    spin_sec: float = 2.0,
+    hold_sec: float = 1.0,
+    gap_sec: float = 0.2,
+) -> bytes:
+    """
+    One GIF: spin + pause for each round in order.
+    rounds: list of (roster, winner_slot_index).
+    """
+    if not rounds:
+        raise ValueError("no rounds")
+
+    all_frames: list[Image.Image] = []
+    hold_count = max(2, int(hold_sec * fps))
+    gap_count = max(1, int(gap_sec * fps))
+
+    for rnd_idx, (roster, winner_slot) in enumerate(rounds, start=1):
+        spin_frames = _round_spin_frames(roster, winner_slot, size=size, fps=fps, spin_sec=spin_sec)
+        all_frames.extend(spin_frames)
+
+        badge = _round_badge_layer(size, rnd_idx)
+        pointer = _pointer_layer(size)
+        base = _wheel_layer(size, roster)
+        r_final = _final_rotation_degrees(len(roster), winner_slot)
+        still = _compose_frame(base, pointer, r_final, badge)
+
+        for _ in range(hold_count):
+            all_frames.append(still.copy())
+
+        if rnd_idx < len(rounds):
+            for _ in range(gap_count):
+                all_frames.append(still.copy())
+
+    return _save_gif(all_frames, fps)

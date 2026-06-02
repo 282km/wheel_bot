@@ -8,7 +8,7 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
 from wheel_bot import db
-from wheel_bot.render_wheel import render_spin_gif
+from wheel_bot.render_wheel import render_multi_round_spin_gif
 
 
 class _SafeDict(dict[str, Any]):
@@ -23,6 +23,40 @@ def _fmt_template(template: str, **kwargs: Any) -> str:
 def _participant_label(nick: str, description: str | None) -> str:
     d = str(description or "").strip()
     return f"{nick} ({d})" if d else str(nick)
+
+
+def _announce_with_members(
+    templates: dict[str, str],
+    *,
+    wheel_id: int,
+    depositor_label: str,
+    deposit_amount: float,
+    prize_pool: float,
+    prizes: list[float],
+    roster_rows: list[tuple[int, str, str, int]],
+    silent_footer: bool = False,
+) -> str:
+    prize_lines = [f"{idx}. ${float(prize):g}" for idx, prize in enumerate(prizes, start=1)]
+    announce_text = _fmt_template(
+        templates["announce"],
+        wheel_id=wheel_id,
+        depositor=depositor_label,
+        deposit_amount=f"{float(deposit_amount):g}",
+        prize_pool=f"{prize_pool:g}",
+        winners_count=len(prizes),
+        prize_lines="\n".join(prize_lines),
+    )
+    members_lines = [
+        f"{idx}. {_participant_label(str(row[1]), str(row[2]))}" for idx, row in enumerate(roster_rows, start=1)
+    ]
+    text = (
+        f"{announce_text}\n\n"
+        f"👥 Участники текущего колеса:\n"
+        f"{chr(10).join(members_lines)}"
+    )
+    if silent_footer:
+        text += "\n\n🤫 Тишина в чате"
+    return text
 
 
 async def _prepare_spin_data(
@@ -91,15 +125,15 @@ async def run_wheel_spin(
         results_sent=True,
     )
     delay_sec = max(0, min(300, int(announce_delay_sec)))
-    prize_lines = [f"{idx}. ${float(prize):g}" for idx, prize in enumerate(prizes, start=1)]
-    announce_text = _fmt_template(
-        templates["announce"],
+    announce_text = _announce_with_members(
+        templates,
         wheel_id=sid,
-        depositor=depositor_label,
-        deposit_amount=f"{float(deposit_amount):g}",
-        prize_pool=f"{prize_pool:g}",
-        winners_count=len(prizes),
-        prize_lines="\n".join(prize_lines),
+        depositor_label=depositor_label,
+        deposit_amount=float(deposit_amount),
+        prize_pool=prize_pool,
+        prizes=prizes,
+        roster_rows=roster_rows,
+        silent_footer=False,
     )
     await bot.send_message(chat_id, announce_text)
     if delay_sec:
@@ -107,6 +141,8 @@ async def run_wheel_spin(
 
     remaining_rows = roster_rows.copy()
     results: list[dict[str, Any]] = []
+    gif_rounds: list[tuple[list[tuple[str, str, int]], int]] = []
+    caption_lines: list[str] = []
 
     for rnd, prize in enumerate(prizes, start=1):
         if not remaining_rows:
@@ -118,22 +154,32 @@ async def run_wheel_spin(
 
         winner_slot = next(i for i, row in enumerate(remaining_rows) if int(row[0]) == winner_id)
         gif_roster = [(row[1], row[2], row[3]) for row in remaining_rows]
-        gif_bytes = render_spin_gif(gif_roster, winner_slot=winner_slot)
+        gif_rounds.append((gif_roster, winner_slot))
 
         pwin = await db.get_participant(conn, winner_id)
         nick = _participant_label(pwin.poker_nick, pwin.description) if pwin else str(winner_id)
-        caption = _fmt_template(
-            templates["round_caption"], round=rnd, winner=nick, prize=f"{float(prize):g}", wheel_id=sid
-        )
-
-        await bot.send_animation(
-            chat_id,
-            BufferedInputFile(gif_bytes, filename=f"wheel_{sid}_{rnd}.gif"),
-            caption=caption,
+        caption_lines.append(
+            _fmt_template(
+                templates["round_caption"],
+                round=rnd,
+                winner=nick,
+                prize=f"{float(prize):g}",
+                wheel_id=sid,
+            )
         )
 
         results.append({"round": rnd, "winner_id": winner_id, "prize": float(prize)})
         remaining_rows = [row for row in remaining_rows if int(row[0]) != winner_id]
+
+    gif_bytes = render_multi_round_spin_gif(gif_rounds)
+    caption = "\n".join(caption_lines)
+    if len(caption) > 1020:
+        caption = caption[:1017] + "…"
+    await bot.send_animation(
+        chat_id,
+        BufferedInputFile(gif_bytes, filename=f"wheel_{sid}.gif"),
+        caption=caption or f"🎡 Колесо #{sid}",
+    )
 
     await db.set_last_roster_ids(conn, roster_ids)
     await db.set_draft_ids(conn, roster_ids)
@@ -246,24 +292,15 @@ async def send_silent_announce(
     )
     await db.set_last_roster_ids(conn, roster_ids)
     await db.set_draft_ids(conn, roster_ids)
-    prize_lines = [f"{idx}. ${float(prize):g}" for idx, prize in enumerate(prizes, start=1)]
-    announce_text = _fmt_template(
-        templates["announce"],
+    text = _announce_with_members(
+        templates,
         wheel_id=sid,
-        depositor=depositor_label,
-        deposit_amount=f"{float(deposit_amount):g}",
-        prize_pool=f"{prize_pool:g}",
-        winners_count=len(prizes),
-        prize_lines="\n".join(prize_lines),
-    )
-    members_lines = [
-        f"{idx}. {_participant_label(str(row[1]), str(row[2]))}" for idx, row in enumerate(roster_rows, start=1)
-    ]
-    text = (
-        f"{announce_text}\n\n"
-        f"👥 Участники текущего колеса:\n"
-        f"{chr(10).join(members_lines)}\n\n"
-        f"🤫 Тишина в чате"
+        depositor_label=depositor_label,
+        deposit_amount=float(deposit_amount),
+        prize_pool=prize_pool,
+        prizes=prizes,
+        roster_rows=roster_rows,
+        silent_footer=True,
     )
     await bot.send_message(chat_id, text)
     return {"ok": True, "session_id": sid}
