@@ -565,6 +565,7 @@ async function animateSilentRound(round) {
   const winnerIdx = roster.findIndex((x) => Number(x.id) === Number(round.winner_id));
   if (!roster.length || winnerIdx < 0) return;
   paintSilentWheel(roster);
+  renderSilentRosterList(roster);
   const seg = 360 / roster.length;
   const stopDeg = -((winnerIdx + 0.5) * seg);
   const extraTurns = 360 * 7;
