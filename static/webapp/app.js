@@ -545,16 +545,19 @@ function paintSilentWheel(roster) {
     .map((p, i) => {
       const angDeg = (i + 0.5) * step - 90;
       const ang = (angDeg * Math.PI) / 180;
-      const radius = roster.length >= 10 ? 34 : 38;
+      const radius = roster.length >= 12 ? 35 : roster.length >= 9 ? 37 : 39;
       const x = 50 + Math.cos(ang) * radius;
       const y = 50 + Math.sin(ang) * radius;
       // Align text along the slice axis.
       let textRotate = angDeg;
       if (textRotate > 90) textRotate -= 180;
       if (textRotate < -90) textRotate += 180;
-      return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(
-        p.nick
-      )}</div>`;
+      const halfStepRad = (Math.PI / 180) * (step / 2);
+      const chordPct = Math.max(8, Math.min(24, 2 * radius * Math.sin(halfStepRad) * 0.86));
+      const fontPx = roster.length >= 12 ? 8 : roster.length >= 9 ? 9 : 10;
+      return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;max-width:${chordPct.toFixed(
+        1
+      )}%;font-size:${fontPx}px;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(p.nick)}</div>`;
     })
     .join("");
   disc.innerHTML = `<div class="silent-wheel-labels">${labels}</div>`;
