@@ -528,7 +528,7 @@ function paintSilentWheel(roster) {
   if (!roster || !roster.length) {
     disc.style.transform = "rotate(0deg)";
     disc.style.background = "#1a1e2a";
-    disc.textContent = "Добавьте участников и нажмите «Крутить колесо»";
+    disc.innerHTML = '<div class="silent-wheel-empty">Добавьте участников и нажмите «Крутить колесо»</div>';
     return;
   }
   const step = 360 / roster.length;
@@ -538,7 +538,15 @@ function paintSilentWheel(roster) {
     const e = (i + 1) * step;
     chunks.push(`${wheelPaletteByHue(roster[i].hue)} ${s}deg ${e}deg`);
   }
-  disc.textContent = "";
+  const labels = roster
+    .map((p, i) => {
+      const ang = (i + 0.5) * step;
+      return `<div class="silent-wheel-label" style="transform: rotate(${ang}deg) translateY(-41%) rotate(${-ang}deg);">${escapeHtml(
+        p.nick
+      )}</div>`;
+    })
+    .join("");
+  disc.innerHTML = `<div class="silent-wheel-labels">${labels}</div>`;
   disc.style.background = `conic-gradient(from -90deg, ${chunks.join(", ")})`;
 }
 
@@ -554,6 +562,7 @@ async function animateSilentRound(round) {
   const stopDeg = -((winnerIdx + 0.5) * seg);
   const extraTurns = 360 * 7;
   const total = extraTurns + stopDeg;
+  const winnerColor = wheelPaletteByHue(roster[winnerIdx].hue);
   disc.style.transition = "none";
   disc.style.transform = "rotate(0deg)";
   // force style flush
@@ -562,7 +571,9 @@ async function animateSilentRound(round) {
   disc.style.transform = `rotate(${total}deg)`;
   winnerLine.textContent = `Раунд ${round.round}: крутится...`;
   await sleep(5000);
-  winnerLine.textContent = `Раунд ${round.round}: ${round.winner_nick} — ${fmtMoney(round.prize)}`;
+  winnerLine.innerHTML = `Раунд ${round.round}: <strong>${escapeHtml(round.winner_nick)}</strong> — ${fmtMoney(
+    round.prize
+  )} <span style="color:${winnerColor}">●</span>`;
   await sleep(5000);
 }
 

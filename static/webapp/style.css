@@ -227,6 +227,35 @@ footer {
   overflow: hidden;
 }
 
+.silent-wheel-empty {
+  text-align: center;
+  color: #d6def0;
+  padding: 12px;
+}
+
+.silent-wheel-labels {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+}
+
+.silent-wheel-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: 0 0;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  max-width: 86px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
 .silent-wheel-winner {
   min-height: 24px;
   margin-bottom: 10px;
