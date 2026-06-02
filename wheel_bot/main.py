@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
@@ -39,12 +40,53 @@ async def run() -> None:
         bot = Bot(settings.bot_token)
         dp = Dispatcher()
         dp.include_router(setup_router(settings, conn, db_lock))
-        app = create_app(settings, conn, bot, dp, db_lock)
+
+        webhook_url = f"{settings.public_base_url.rstrip('/')}{settings.webhook_path}"
+        allowed_updates = sorted(
+            {
+                *dp.resolve_used_update_types(),
+                "message",
+                "edited_message",
+                "callback_query",
+                "my_chat_member",
+            }
+        )
+
+        @asynccontextmanager
+        async def app_lifespan(_: Any):
+            try:
+                await bot.set_webhook(
+                    url=webhook_url,
+                    secret_token=settings.webhook_secret,
+                    allowed_updates=allowed_updates,
+                )
+                log.info("Webhook registered: %s", webhook_url)
+            except Exception:
+                log.exception("Webhook registration failed")
+            try:
+                await bot.set_chat_menu_button(
+                    menu_button=MenuButtonWebApp(
+                        text="Колесо",
+                        web_app=WebAppInfo(url=settings.webapp_url),
+                    )
+                )
+                log.info("WebApp menu button set: %s", settings.webapp_url)
+            except Exception:
+                log.exception("Failed to set WebApp menu button (check BotFather domain)")
+            yield
+            try:
+                await bot.delete_webhook(drop_pending_updates=False)
+            except Exception:
+                log.exception("Webhook delete failed")
+            await bot.session.close()
+            await conn.close()
+
+        app = create_app(settings, conn, bot, dp, db_lock, lifespan=app_lifespan)
     except Exception:
         log.exception("Failed to initialize database or Telegram app")
         raise
 
-    log.info("Wheel bot starting on %s:%s", settings.http_host, settings.http_port)
+    log.info("Wheel bot HTTP on %s:%s", settings.http_host, settings.http_port)
     log.info("TARGET_CHAT_ID=%s (stats)", settings.target_chat_id)
     log.info("WHEEL_CHANNEL_ID=%s", settings.wheel_channel_id)
 
@@ -60,41 +102,9 @@ async def run() -> None:
         uv_kwargs["ssl_certfile"] = settings.ssl_certfile
         uv_kwargs["ssl_keyfile"] = settings.ssl_keyfile
 
-    webhook_url = f"{settings.public_base_url.rstrip('/')}{settings.webhook_path}"
-    allowed_updates = sorted(
-        {
-            *dp.resolve_used_update_types(),
-            "message",
-            "edited_message",
-            "callback_query",
-            "my_chat_member",
-        }
-    )
-    await bot.set_webhook(
-        url=webhook_url,
-        secret_token=settings.webhook_secret,
-        allowed_updates=allowed_updates,
-    )
-    log.info("Webhook allowed_updates: %s", allowed_updates)
-    try:
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(
-                text="Колесо",
-                web_app=WebAppInfo(url=settings.webapp_url),
-            )
-        )
-        log.info("WebApp menu button set: %s", settings.webapp_url)
-    except Exception:
-        log.exception("Failed to set WebApp menu button (check BotFather domain)")
-
     cfg = uvicorn.Config(**uv_kwargs)
     server = uvicorn.Server(cfg)
-    try:
-        await server.serve()
-    finally:
-        await bot.delete_webhook(drop_pending_updates=False)
-        await bot.session.close()
-        await conn.close()
+    await server.serve()
 
 
 def main() -> None:

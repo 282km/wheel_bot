@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, Callable, Optional
 
 import aiosqlite
 from aiogram import Bot
@@ -75,6 +77,7 @@ def create_app(
     bot: Bot,
     dp: Dispatcher,
     db_lock: asyncio.Lock,
+    lifespan: Optional[Callable[[Any], AsyncIterator[None]]] = None,
 ) -> Starlette:
     webhook_log = logging.getLogger("wheel_bot.webhook")
 
@@ -610,7 +613,7 @@ def create_app(
         Mount("/webapp", StaticFiles(directory=str(settings.static_dir / "webapp"), html=True)),
     ]
 
-    app = Starlette(routes=routes)
+    app = Starlette(routes=routes, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
