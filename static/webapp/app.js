@@ -21,6 +21,41 @@ function getTg() {
   return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 }
 
+function onClick(sel, handler) {
+  const el = typeof sel === "string" ? $(sel) : sel;
+  if (el) el.addEventListener("click", handler);
+}
+
+function onSubmit(sel, handler) {
+  const el = typeof sel === "string" ? $(sel) : sel;
+  if (el) el.addEventListener("submit", handler);
+}
+
+function resolveTelegramInitData() {
+  const tg = getTg();
+  if (!tg) {
+    return { data: "", tg: null, reason: "no_telegram" };
+  }
+  if (tg.initData) {
+    return { data: tg.initData, tg, reason: "ok" };
+  }
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("hash") && params.has("auth_date")) {
+    return { data: params.toString(), tg, reason: "url_query" };
+  }
+  return { data: "", tg, reason: "empty" };
+}
+
+async function waitForInitData(maxMs = 3000) {
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    const resolved = resolveTelegramInitData();
+    if (resolved.data) return resolved;
+    await sleep(100);
+  }
+  return resolveTelegramInitData();
+}
+
 function tgAlert(msg) {
   const tg = getTg();
   if (tg && tg.showAlert) {
@@ -624,6 +659,22 @@ function setTab(name) {
   }
 }
 
+function bindAdminTestChatButton(btn) {
+  if (!btn || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      const res = await api("/api/admin/test-chat", { method: "POST" });
+      tgAlert(`Тестовое сообщение отправлено в чат ${res.chat_id}.`);
+    } catch (err) {
+      tgAlert(String(err && err.message ? err.message : err));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 function renderHome(roleName) {
   const root = $("#home-content");
   if (!root) return;
@@ -641,6 +692,7 @@ function renderHome(roleName) {
         <button id="admin-test-chat-home" type="button">Тестовое сообщение в чат</button>
       </div>
     `;
+    bindAdminTestChatButton($("#admin-test-chat-home"));
     return;
   }
   root.innerHTML = `
@@ -814,11 +866,14 @@ function showBootError(detail) {
 }
 
 async function boot() {
-  const tg = window.Telegram && window.Telegram.WebApp;
-  if (!tg || !tg.initData) {
-    showBootError(
-      "Откройте через кнопку «🎡 Управление колесом» в личке у бота или меню «Колесо». Ссылку в браузере открывать нельзя."
-    );
+  const init = await waitForInitData();
+  const tg = init.tg;
+  if (!tg || !init.data) {
+    const hint =
+      init.reason === "no_telegram"
+        ? "Страница открыта не в Telegram. Закройте браузер и откройте WebApp из бота."
+        : "В Telegram: личка бота → /start → кнопка «🎡 Управление колесом» (или меню «Колесо» слева внизу).";
+    showBootError(hint);
     return;
   }
   tg.ready();
@@ -827,8 +882,8 @@ async function boot() {
   let sess;
   try {
     sess = await api("/api/session", {
-    method: "POST",
-      body: JSON.stringify({ initData: tg.initData }),
+      method: "POST",
+      body: JSON.stringify({ initData: init.data }),
     });
   } catch (err) {
     const msg = String(err && err.message ? err.message : err);
@@ -1117,22 +1172,7 @@ async function boot() {
     });
   }
 
-  const bindAdminTestChatButton = (btn) => {
-    if (!btn) return;
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      try {
-        const res = await api("/api/admin/test-chat", { method: "POST" });
-        tgAlert(`Тестовое сообщение отправлено в чат ${res.chat_id}.`);
-      } catch (err) {
-        tgAlert(String(err && err.message ? err.message : err));
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  };
   bindAdminTestChatButton($("#admin-test-chat"));
-  bindAdminTestChatButton($("#admin-test-chat-home"));
 
   const adminForm = $("#admin-form");
   if (adminForm) {
@@ -1145,7 +1185,7 @@ async function boot() {
       await reloadAdmins();
     });
   }
-  $("#templates-form").addEventListener("submit", async (e) => {
+  onSubmit("#templates-form", async (e) => {
     e.preventDefault();
     await api("/api/message-templates", {
       method: "PUT",
@@ -1159,7 +1199,7 @@ async function boot() {
     });
     tgAlert("Шаблоны сохранены.");
   });
-  $("#tpl-reset-defaults").addEventListener("click", async () => {
+  onClick("#tpl-reset-defaults", async () => {
     if (!(await tgConfirm("Вернуть стандартные шаблоны сообщений?"))) return;
     await api("/api/message-templates/reset", { method: "POST" });
     await reloadTemplates();

@@ -138,6 +138,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection) -> Router:
             return
         await message.answer("В общем чате доступна команда статистики «/stat» или текст «Статистика».")
 
+    @router.message(Command("app", "webapp"))
+    async def cmd_app(message: Message) -> None:
+        await cmd_wheel(message)
+
     @router.message(Command("колесо"))
     async def cmd_wheel(message: Message) -> None:
         if message.chat.type != "private":
