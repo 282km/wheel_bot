@@ -184,12 +184,22 @@
         </section>
 
         <section id="tab-admins" class="panel hidden">
-          <h2>Админы</h2>
-          <form id="admin-form" class="row">
-            <input name="tid" placeholder="Telegram user id" inputmode="numeric" required />
-            <button type="submit">Сделать админом</button>
-          </form>
-          <div id="alist" class="list"></div>
+          <h2>Админ</h2>
+          <div class="card" style="margin-bottom:12px">
+            <div><strong>Проверка чата</strong></div>
+            <p class="muted" style="margin:8px 0">
+              Отправит тестовое сообщение в рабочий чат бота (TARGET_CHAT_ID).
+            </p>
+            <button id="admin-test-chat" type="button">Тестовое сообщение в чат</button>
+          </div>
+          <div id="admin-mgmt-block">
+            <h3>Управление админами</h3>
+            <form id="admin-form" class="row">
+              <input name="tid" placeholder="Telegram user id" inputmode="numeric" required />
+              <button type="submit">Сделать админом</button>
+            </form>
+            <div id="alist" class="list"></div>
+          </div>
         </section>
       </main>
 
@@ -202,6 +212,6 @@
       <p>Не удалось запустить WebApp. Откройте через кнопку в личке у бота.</p>
     </div>
 
-    <script src="./app.js?v=20260212c"></script>
+    <script src="./app.js?v=20260212d"></script>
   </body>
 </html>

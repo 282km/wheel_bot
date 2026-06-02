@@ -816,17 +816,11 @@ async function boot() {
     mk("wheel_silent", "Колесо (тишина)");
     mk("history", "История колес");
     mk("templates", "Шаблоны сообщений");
-  }
-  if (me.role === "superadmin") {
-    mk("admins", "Админы");
+    mk("admins", "Админ");
     mk("hidden_participants", "Скрытые участники");
-  } else {
-    if (me.role === "admin") {
-      mk("hidden_participants", "Скрытые участники");
-    }
-    const adminsPanel = $("#tab-admins");
-    if (adminsPanel) adminsPanel.classList.add("hidden");
   }
+  const adminMgmt = $("#admin-mgmt-block");
+  if (adminMgmt) adminMgmt.classList.toggle("hidden", me.role !== "superadmin");
 
   renderHome(me.role);
   const firstTabBtn = document.querySelector('.tabs button[data-tab="home"]');
@@ -1074,14 +1068,32 @@ async function boot() {
     });
   }
 
-  $("#admin-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const tid = Number(fd.get("tid") || "0");
-    await api("/api/admins", { method: "POST", body: JSON.stringify({ telegram_id: tid }) });
-    e.target.reset();
-    await reloadAdmins();
-  });
+  const adminTestChat = $("#admin-test-chat");
+  if (adminTestChat) {
+    adminTestChat.addEventListener("click", async () => {
+      adminTestChat.disabled = true;
+      try {
+        const res = await api("/api/admin/test-chat", { method: "POST" });
+        tgAlert(`Тестовое сообщение отправлено в чат ${res.chat_id}.`);
+      } catch (err) {
+        tgAlert(String(err && err.message ? err.message : err));
+      } finally {
+        adminTestChat.disabled = false;
+      }
+    });
+  }
+
+  const adminForm = $("#admin-form");
+  if (adminForm) {
+    adminForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const tid = Number(fd.get("tid") || "0");
+      await api("/api/admins", { method: "POST", body: JSON.stringify({ telegram_id: tid }) });
+      e.target.reset();
+      await reloadAdmins();
+    });
+  }
   $("#templates-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     await api("/api/message-templates", {

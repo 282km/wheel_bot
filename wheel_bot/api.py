@@ -402,6 +402,24 @@ def create_app(
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
+    async def admin_test_chat(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            admin_id = int(payload["tg_id"])
+            chat_id = int(settings.target_chat_id)
+            text = (
+                "✅ Тестовое сообщение от WebApp «Колесо».\n"
+                f"Админ: {admin_id}\n"
+                f"Чат: {chat_id}\n"
+                "Если вы видите это — бот может отправлять сообщения в рабочий чат."
+            )
+            await bot.send_message(chat_id, text)
+            return JSONResponse({"ok": True, "chat_id": chat_id})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
     async def health(_: Request) -> Response:
         return JSONResponse({"ok": True})
 
@@ -439,6 +457,7 @@ def create_app(
         Route("/api/admins", admins_list, methods=["GET"]),
         Route("/api/admins", admins_create, methods=["POST"]),
         Route("/api/admins/{id}", admins_delete, methods=["DELETE"]),
+        Route("/api/admin/test-chat", admin_test_chat, methods=["POST"]),
         Route(settings.webhook_path, telegram_webhook, methods=["POST"]),
         Mount("/webapp", StaticFiles(directory=str(settings.static_dir / "webapp"), html=True)),
     ]
