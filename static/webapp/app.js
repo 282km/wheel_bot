@@ -15,6 +15,7 @@ let silentCurrentSessionId = null;
 let silentCurrentSegments = [];
 let silentWheelRotationDeg = 0;
 let silentColorById = new Map();
+let silentCenterOverlayTimer = null;
 
 function getTg() {
   return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -163,38 +164,80 @@ function buildSilentSegments(roster) {
     const hue = hueForSilentId(p.id, idx, src.length);
     return {
       ...p,
+      num: idx + 1,
       hue,
       color: wheelPaletteByHue(hue),
     };
   });
 }
 
+function silentLegendRows(roster) {
+  const src = Array.isArray(roster) ? roster : [];
+  if (src.length) {
+    return src.map((p, idx) => ({
+      num: p.num ?? idx + 1,
+      id: p.id,
+      nick: p.nick || p.poker_nick || "",
+      color: p.color || silentColorForParticipantId(p.id),
+    }));
+  }
+  return selectedIds
+    .map((id, idx) => {
+      const p = participants.find((x) => x.id === id);
+      if (!p) return null;
+      return {
+        num: idx + 1,
+        id: p.id,
+        nick: p.poker_nick || "",
+        color: silentColorForParticipantId(id),
+      };
+    })
+    .filter(Boolean);
+}
+
 function renderSilentLegend(roster) {
   const root = $("#silent-wheel-legend");
   if (!root) return;
   root.innerHTML = "";
-  const src = Array.isArray(roster) ? roster : [];
-  if (!src.length) {
-    for (const id of selectedIds) {
-      const p = participants.find((x) => x.id === id);
-      if (!p) continue;
-      const row = document.createElement("div");
-      row.className = "silent-legend-item";
-      const color = silentColorForParticipantId(id);
-      row.innerHTML = `<span class="silent-dot" style="background:${color}"></span><span>${escapeHtml(
-        p.poker_nick || ""
-      )}</span>`;
-      root.appendChild(row);
-    }
+  const rows = silentLegendRows(roster);
+  if (!rows.length) {
+    root.innerHTML = '<div class="muted" style="font-size:13px">Добавьте участников в текущее колесо</div>';
     return;
   }
-  for (const p of src) {
-    const row = document.createElement("div");
-    row.className = "silent-legend-item";
-    const color = p.color || silentColorForParticipantId(p.id);
-    row.innerHTML = `<span class="silent-dot" style="background:${color}"></span><span>${escapeHtml(p.nick || "")}</span>`;
-    root.appendChild(row);
+  for (const row of rows) {
+    const el = document.createElement("div");
+    el.className = "silent-legend-item";
+    el.innerHTML = `<span class="silent-legend-num">${row.num}.</span><span class="silent-dot" style="background:${row.color}"></span><span class="silent-legend-nick">${escapeHtml(
+      row.nick
+    )}</span>`;
+    root.appendChild(el);
   }
+}
+
+function hideSilentCenterOverlay() {
+  if (silentCenterOverlayTimer) {
+    clearTimeout(silentCenterOverlayTimer);
+    silentCenterOverlayTimer = null;
+  }
+  const el = $("#silent-wheel-center");
+  if (!el) return;
+  el.classList.add("hidden");
+  el.innerHTML = "";
+}
+
+function showSilentCenterOverlay(roundNo, winnerNick, prize, holdMs = 2600) {
+  const el = $("#silent-wheel-center");
+  if (!el) return;
+  hideSilentCenterOverlay();
+  el.innerHTML = `<div class="swc-round">Раунд ${escapeHtml(String(roundNo))}</div>
+    <div class="swc-nick">${escapeHtml(String(winnerNick || ""))}</div>
+    <div class="swc-prize">${escapeHtml(fmtMoney(prize))}</div>`;
+  el.classList.remove("hidden");
+  silentCenterOverlayTimer = setTimeout(() => {
+    el.classList.add("hidden");
+    el.innerHTML = "";
+    silentCenterOverlayTimer = null;
+  }, holdMs);
 }
 
 const SILENT_WHEEL_MAX_PX = 560;
@@ -225,23 +268,6 @@ function ensureSilentCanvas() {
 
 function hslFromHue(h) {
   return `hsl(${Number(h || 0)}, 62%, 48%)`;
-}
-
-function prepareCanvasLabel(ctx, nick, maxWidth, maxFont, minFont) {
-  const raw = String(nick || "").trim();
-  let size = maxFont;
-  while (size >= minFont) {
-    ctx.font = `600 ${size}px system-ui, sans-serif`;
-    if (ctx.measureText(raw).width <= maxWidth) return { text: raw, size };
-    size -= 1;
-  }
-  ctx.font = `600 ${minFont}px system-ui, sans-serif`;
-  let text = raw;
-  if (ctx.measureText(text).width <= maxWidth) return { text, size: minFont };
-  while (text.length > 1 && ctx.measureText(`${text}…`).width > maxWidth) {
-    text = text.slice(0, -1);
-  }
-  return { text: `${text}…`, size: minFont };
 }
 
 function setSilentWheelRotation(deg, animate) {
@@ -279,10 +305,10 @@ function drawSilentWheelCanvas(roster) {
   const cy = css / 2;
   const pad = Math.max(8, css * 0.03);
   const outerR = css / 2 - pad;
+  const hubR = Math.max(outerR * 0.22, Math.min(outerR * 0.34, css * 0.14));
   const step = (Math.PI * 2) / n;
-  const labelR = outerR * 0.6;
-  const maxFont = Math.max(10, Math.min(17, Math.round(css / (7 + n * 0.45))));
-  const minFont = Math.max(8, maxFont - 6);
+  const labelR = (outerR + hubR) / 2;
+  const numFont = Math.max(12, Math.min(26, Math.round((outerR - hubR) * 0.42)));
   ctx.textBaseline = "middle";
   ctx.textAlign = "center";
 
@@ -301,21 +327,22 @@ function drawSilentWheelCanvas(roster) {
     ctx.stroke();
   }
 
+  ctx.beginPath();
+  ctx.arc(cx, cy, hubR, 0, Math.PI * 2);
+  ctx.fillStyle = "#121622";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
   for (let i = 0; i < n; i += 1) {
     const start = -Math.PI / 2 + i * step;
     const end = start + step;
     const mid = start + step / 2;
     const lx = cx + labelR * Math.cos(mid);
     const ly = cy + labelR * Math.sin(mid);
-    const maxW = 2 * labelR * Math.sin(step / 2) * 0.98;
-    const { text: label, size: fontSize } = prepareCanvasLabel(
-      ctx,
-      roster[i].nick,
-      maxW,
-      maxFont,
-      minFont
-    );
-    ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+    const label = String(roster[i].num ?? i + 1);
+    ctx.font = `700 ${numFont}px system-ui, sans-serif`;
 
     ctx.save();
     ctx.beginPath();
@@ -439,8 +466,8 @@ function escapeHtml(s) {
 }
 
 function renderPoolAndPicked() {
-  renderWheelRoster("#pool", "#picked", "#depositor");
-  renderWheelRoster("#pool-silent", "#picked-silent", "#depositor-silent");
+  renderWheelRoster("#pool", "#picked", "#depositor", { numbered: false });
+  renderWheelRoster("#pool-silent", "#picked-silent", "#depositor-silent", { numbered: true });
   resetSilentColorMap(selectedIds);
   const rosterPreview = selectedIds
     .map((id, idx) => {
@@ -457,7 +484,8 @@ function renderPoolAndPicked() {
   paintSilentWheel(silentCurrentSegments);
 }
 
-function renderWheelRoster(poolSel, pickedSel, depositorSel) {
+function renderWheelRoster(poolSel, pickedSel, depositorSel, opts = {}) {
+  const numbered = Boolean(opts.numbered);
   const pool = $(poolSel);
   const picked = $(pickedSel);
   if (!pool || !picked) return;
@@ -469,26 +497,28 @@ function renderWheelRoster(poolSel, pickedSel, depositorSel) {
     if (sel.has(p.id)) continue;
     pool.appendChild(renderCard(p, "pool"));
   }
-  for (const id of selectedIds) {
+  for (let i = 0; i < selectedIds.length; i += 1) {
+    const id = selectedIds[i];
     const p = participants.find((x) => x.id === id);
     if (!p) continue;
-    picked.appendChild(renderCard(p, "picked"));
+    picked.appendChild(renderCard(p, "picked", numbered ? i + 1 : null));
   }
 
   wireDnD(pool, picked);
   refreshDepositorSelect(depositorSel);
 }
 
-function renderCard(p, side) {
+function renderCard(p, side, wheelNumber = null) {
   const div = document.createElement("div");
   div.className = "card card-wheel";
   div.draggable = true;
   div.dataset.pid = String(p.id);
+  const numHtml = wheelNumber != null ? `<span class="wheel-num">${wheelNumber}.</span>` : "";
   const actionHtml =
     side === "pool"
       ? `<div class="row card-wheel-actions"><button type="button" class="btn-wheel-add">Добавить</button></div>`
       : `<div class="row card-wheel-actions"><button type="button" class="btn-wheel-remove">Убрать</button></div>`;
-  div.innerHTML = `<div><strong>${escapeHtml(p.poker_nick)}</strong></div>
+  div.innerHTML = `<div><strong>${numHtml}${escapeHtml(p.poker_nick)}</strong></div>
     <div><small>${escapeHtml(p.description || "")}</small></div>${actionHtml}`;
   const btn = div.querySelector(".card-wheel-actions button");
   if (btn) {
@@ -742,6 +772,7 @@ function renderSilentResults(items) {
 }
 
 function paintSilentWheel(roster) {
+  hideSilentCenterOverlay();
   silentWheelRotationDeg = 0;
   drawSilentWheelCanvas(roster);
   renderSilentLegend(roster);
@@ -766,6 +797,7 @@ async function animateSilentRound(round) {
   const stopDeg = -((winnerIdx + 0.5) * seg);
   const total = 360 * 7 + stopDeg;
 
+  hideSilentCenterOverlay();
   drawSilentWheelCanvas(roster);
   setSilentWheelRotation(0, false);
   void canvas.offsetWidth;
@@ -774,13 +806,14 @@ async function animateSilentRound(round) {
 
   winnerLine.textContent = `Раунд ${round.round}: крутится...`;
   await sleep(5000);
+
+  const winnerNum = winnerIdx + 1;
   const winnerColor = silentColorForParticipantId(round.winner_id);
-  winnerLine.innerHTML = `Раунд ${round.round}: <strong><span class="silent-dot" style="background:${winnerColor}"></span> ${escapeHtml(
+  showSilentCenterOverlay(round.round, `${winnerNum}. ${round.winner_nick}`, round.prize, 2600);
+  winnerLine.innerHTML = `Раунд ${round.round}: <strong><span class="silent-dot" style="background:${winnerColor}"></span> ${winnerNum}. ${escapeHtml(
     round.winner_nick
-  )}</strong> — ${fmtMoney(
-    round.prize
-  )}`;
-  await sleep(5000);
+  )}</strong> — ${fmtMoney(round.prize)}`;
+  await sleep(2800);
 }
 
 function showBootError(detail) {
@@ -1019,6 +1052,7 @@ async function boot() {
       if (sendBtn) sendBtn.disabled = true;
       resetSilentColorMap(selectedIds);
       silentSpinRunning = true;
+      hideSilentCenterOverlay();
       renderSilentResults([]);
       try {
         const res = await api("/api/wheel/silent-spin", {
