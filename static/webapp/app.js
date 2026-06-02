@@ -504,7 +504,7 @@ function escapeHtml(s) {
 }
 
 function renderPoolAndPicked() {
-  renderWheelRoster("#pool", "#picked", "#depositor", { numbered: false });
+  renderWheelRoster("#pool", "#picked", "#depositor", { numbered: true });
   renderWheelRoster("#pool-silent", "#picked-silent", "#depositor-silent", { numbered: true });
   resetSilentColorMap(selectedIds);
   const rosterPreview = selectedIds
@@ -548,17 +548,28 @@ function renderWheelRoster(poolSel, pickedSel, depositorSel, opts = {}) {
 
 function renderCard(p, side, wheelNumber = null) {
   const div = document.createElement("div");
-  div.className = "card card-wheel";
+  div.className = "card card-wheel card-wheel-compact";
   div.draggable = true;
   div.dataset.pid = String(p.id);
-  const numHtml = wheelNumber != null ? `<span class="wheel-num">${wheelNumber}.</span>` : "";
-  const actionHtml =
-    side === "pool"
-      ? `<div class="row card-wheel-actions"><button type="button" class="btn-wheel-add">Добавить</button></div>`
-      : `<div class="row card-wheel-actions"><button type="button" class="btn-wheel-remove">Убрать</button></div>`;
-  div.innerHTML = `<div><strong>${numHtml}${escapeHtml(p.poker_nick)}</strong></div>
-    <div><small>${escapeHtml(p.description || "")}</small></div>${actionHtml}`;
-  const btn = div.querySelector(".card-wheel-actions button");
+  const desc = String(p.description || "").trim();
+  const numHtml =
+    wheelNumber != null ? `<span class="wheel-num" aria-hidden="true">${wheelNumber}</span>` : "";
+  const descHtml = desc
+    ? `<span class="card-wheel-desc" title="${escapeHtml(desc)}">${escapeHtml(desc)}</span>`
+    : "";
+  const btnClass = side === "pool" ? "btn-wheel-add btn-wheel-mini" : "btn-wheel-remove btn-wheel-mini";
+  const btnLabel = side === "pool" ? "+" : "×";
+  const btnTitle = side === "pool" ? "Добавить в колесо" : "Убрать из колеса";
+  div.innerHTML = `
+    <div class="card-wheel-row">
+      ${numHtml}
+      <div class="card-wheel-main">
+        <span class="card-wheel-nick">${escapeHtml(p.poker_nick)}</span>
+        ${descHtml}
+      </div>
+      <button type="button" class="${btnClass}" title="${btnTitle}" aria-label="${btnTitle}">${btnLabel}</button>
+    </div>`;
+  const btn = div.querySelector("button");
   if (btn) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
