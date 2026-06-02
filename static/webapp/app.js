@@ -339,8 +339,14 @@ function drawSilentWheelCanvas(roster) {
 
 function renderParticipants() {
   const root = $("#plist");
+  if (!root) return;
   root.innerHTML = "";
-  for (const p of allParticipants.filter((x) => !x.is_hidden)) {
+  const visible = allParticipants.filter((x) => !x.is_hidden);
+  if (!visible.length) {
+    root.innerHTML = '<div class="card"><small>Список пуст. Добавьте участника формой выше.</small></div>';
+    return;
+  }
+  for (const p of visible) {
     const div = document.createElement("div");
     div.className = "card";
     const hiddenBadge = p.is_hidden ? ' <small>(скрыт)</small>' : "";
@@ -595,6 +601,9 @@ function setTab(name) {
   if (name === "wheel_silent") {
     requestAnimationFrame(() => paintSilentWheel(silentCurrentSegments));
   }
+  if (name === "participants") {
+    reloadParticipants().catch((e) => tgAlert(String(e && e.message ? e.message : e)));
+  }
 }
 
 function renderHome(roleName) {
@@ -846,6 +855,7 @@ async function boot() {
         });
       }
       resetParticipantForm();
+      await reloadParticipants();
       await reloadDraftUi();
     } catch (err) {
       const msg = String(err && err.message ? err.message : err);
