@@ -328,17 +328,60 @@ function buildSilentSegments(roster) {
   });
 }
 
+function silentFlowState() {
+  if (silentSpunSessionId) return "spun";
+  if (silentAnnounceSessionId) return "announced";
+  return "idle";
+}
+
 function updateSilentSessionStatus() {
   const el = $("#silent-session-status");
-  if (!el) return;
-  const parts = [];
-  if (silentAnnounceSessionId) {
-    parts.push(`анонс: колесо #${silentAnnounceSessionId}`);
+  if (el) {
+    const parts = [];
+    const state = silentFlowState();
+    if (silentAnnounceSessionId) {
+      parts.push(`анонс: колесо #${silentAnnounceSessionId}`);
+    }
+    if (silentSpunSessionId) {
+      parts.push(`кручение: колесо #${silentSpunSessionId}`);
+    }
+    if (state === "announced") {
+      parts.push("ожидает кручения");
+    } else if (state === "spun") {
+      parts.push("можно отправить результаты");
+    }
+    el.textContent = parts.length ? parts.join(" · ") : "";
   }
-  if (silentSpunSessionId) {
-    parts.push(`кручение: колесо #${silentSpunSessionId}`);
+  updateSilentWheelControls();
+}
+
+function updateSilentWheelControls() {
+  const announceBtn = $("#silent-send-announce");
+  const spinBtn = $("#spin-silent");
+  const cancelBtn = $("#silent-cancel-wheel");
+  const resultsBtn = $("#silent-send-results");
+  const state = silentFlowState();
+
+  if (announceBtn) {
+    announceBtn.disabled = state !== "idle" || silentSpinRunning;
   }
-  el.textContent = parts.length ? parts.join(" · ") : "";
+  if (spinBtn) {
+    spinBtn.disabled = state !== "announced" || silentSpinRunning;
+    spinBtn.title =
+      state === "idle"
+        ? "Сначала отправьте анонс в чат"
+        : state === "spun"
+          ? "Колесо уже прокручено"
+          : "";
+  }
+  if (cancelBtn) {
+    cancelBtn.classList.toggle("hidden", state !== "announced");
+    cancelBtn.disabled = silentSpinRunning;
+  }
+  if (resultsBtn) {
+    resultsBtn.disabled = state !== "spun" || silentSpinRunning;
+    resultsBtn.title = state === "spun" ? "" : "Сначала анонс и кручение колеса";
+  }
 }
 
 function hideSilentCenterOverlay() {
@@ -903,6 +946,7 @@ function setTab(name) {
   }
   if (name === "wheel_silent") {
     requestAnimationFrame(() => paintSilentWheel(silentCurrentSegments));
+    updateSilentWheelControls();
   }
   if (name === "participants") {
     reloadParticipants().catch((e) => tgAlert(String(e && e.message ? e.message : e)));
@@ -1460,9 +1504,20 @@ async function boot() {
   if (spinSilentBtn) {
     spinSilentBtn.addEventListener("click", async (e) => {
       if (silentSpinRunning) return;
+      if (!silentAnnounceSessionId) {
+        tapButton(e.currentTarget, "err");
+        tgAlert("Сначала отправьте анонс в чат. Без анонса крутить нельзя.");
+        return;
+      }
+      if (silentSpunSessionId) {
+        tapButton(e.currentTarget, "err");
+        tgAlert("Колесо уже прокручено. Отправьте результаты или отмените текущее колесо до кручения.");
+        return;
+      }
       const spinBtn = e.currentTarget;
       spinBtn.classList.add("is-busy");
       spinBtn.disabled = true;
+      updateSilentWheelControls();
       const depositor_id = Number($("#depositor-silent")?.value || "0");
       const deposit_amount = Number($("#deposit_amount-silent")?.value || "0");
       const prizesRaw = String($("#prizes-silent")?.value || "")
@@ -1474,7 +1529,7 @@ async function boot() {
       const winnerLine = $("#silent-wheel-winner");
       const sendBtn = $("#silent-send-results");
       log.textContent = "Готовим локальное колесо...";
-      if (sendBtn) sendBtn.disabled = true;
+      updateSilentWheelControls();
       resetSilentColorMap(selectedIds);
       silentSpinRunning = true;
       hideSilentCenterOverlay();
@@ -1501,7 +1556,6 @@ async function boot() {
         if (winnerLine) {
           winnerLine.textContent = `Кручение завершено (колесо #${silentSpunSessionId}). Можно отправить результаты в чат.`;
         }
-        if (sendBtn) sendBtn.disabled = !silentSpunSessionId;
         log.textContent = JSON.stringify({ session_id: res.session_id, rounds: rounds.length }, null, 2);
         flashButton(spinBtn, "ok");
       } catch (err) {
@@ -1511,7 +1565,7 @@ async function boot() {
       } finally {
         silentSpinRunning = false;
         spinBtn.classList.remove("is-busy");
-        spinBtn.disabled = false;
+        updateSilentSessionStatus();
       }
     });
   }
@@ -1535,6 +1589,7 @@ async function boot() {
         flashButton(btn, "ok");
         tgAlert(`Результаты колеса #${silentSpunSessionId} отправлены в чат.`);
         silentSpunSessionId = null;
+        silentAnnounceSessionId = null;
         updateSilentSessionStatus();
       } catch (err) {
         flashButton(btn, "err");
@@ -1546,10 +1601,50 @@ async function boot() {
     });
   }
 
+  const sendSilentCancelBtn = $("#silent-cancel-wheel");
+  if (sendSilentCancelBtn) {
+    sendSilentCancelBtn.addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      if (!silentAnnounceSessionId || silentSpunSessionId) {
+        tapButton(btn, "err");
+        return;
+      }
+      const sid = silentAnnounceSessionId;
+      if (!(await tgConfirm(`Отменить колесо #${sid}? Запись удалится из базы, в чат ничего не отправится.`))) {
+        return;
+      }
+      try {
+        await withButtonFeedback(btn, async () => {
+          await api("/api/wheel/silent-cancel", {
+            method: "POST",
+            body: JSON.stringify({ session_id: sid }),
+          });
+          silentAnnounceSessionId = null;
+          silentSpunSessionId = null;
+          hideSilentCenterOverlay();
+          renderSilentResults([]);
+          const winnerLine = $("#silent-wheel-winner");
+          if (winnerLine) winnerLine.textContent = "";
+          const log = $("#spin-silent-log");
+          if (log) log.textContent = "";
+          updateSilentSessionStatus();
+          tgAlert(`Колесо #${sid} отменено. Можно начать заново с анонса.`);
+        });
+      } catch (err) {
+        tgAlert(String(err && err.message ? err.message : err));
+      }
+    });
+  }
+
   const sendSilentAnnounceBtn = $("#silent-send-announce");
   if (sendSilentAnnounceBtn) {
     sendSilentAnnounceBtn.addEventListener("click", async (e) => {
       const btn = e.currentTarget;
+      if (silentFlowState() !== "idle") {
+        tapButton(btn, "err");
+        tgAlert("Сначала завершите текущее колесо: прокрутите и отправьте результаты или отмените колесо после анонса.");
+        return;
+      }
       const depositor_id = Number($("#depositor-silent")?.value || "0");
       const deposit_amount = Number($("#deposit_amount-silent")?.value || "0");
       const prizesRaw = String($("#prizes-silent")?.value || "")
@@ -1571,10 +1666,8 @@ async function boot() {
           silentAnnounceSessionId = Number(res.session_id || 0) || null;
           silentSpunSessionId = null;
           updateSilentSessionStatus();
-          const sendBtn = $("#silent-send-results");
-          if (sendBtn) sendBtn.disabled = true;
           tgAlert(
-            `Анонс отправлен (колесо #${silentAnnounceSessionId}). Теперь нажмите «Крутить колесо», затем «Отправить результаты».`
+            `Анонс отправлен (колесо #${silentAnnounceSessionId}). Нажмите «Крутить колесо» или «Отменить колесо», если передумали.`
           );
         });
       } catch (err) {
@@ -1653,6 +1746,7 @@ async function boot() {
 
   await reloadParticipants();
   await reloadDraftUi();
+  updateSilentSessionStatus();
   ensureAddFormReady();
   if (me.role === "superadmin") {
     try {

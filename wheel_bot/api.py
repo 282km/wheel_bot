@@ -27,7 +27,13 @@ from wheel_bot.posting import (
     set_wheel_post_target,
     wheel_post_settings_payload,
 )
-from wheel_bot.spin_service import run_wheel_spin, run_wheel_spin_silent, send_silent_announce, send_silent_results
+from wheel_bot.spin_service import (
+    cancel_silent_wheel,
+    run_wheel_spin,
+    run_wheel_spin_silent,
+    send_silent_announce,
+    send_silent_results,
+)
 from wheel_bot.tg_validate import validate_webapp_init_data
 
 
@@ -322,6 +328,27 @@ def create_app(
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    async def wheel_silent_cancel(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            body = _json_body(await request.body()) or {}
+            session_id = int(body.get("session_id"))
+            async with db_lock:
+                stats_chat_id, _, post_target = await resolve_wheel_destinations(conn, settings)
+                result = await cancel_silent_wheel(
+                    conn=conn,
+                    stats_chat_id=stats_chat_id,
+                    session_id=session_id,
+                )
+                result["post_target"] = post_target
+            return JSONResponse(result)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     async def wheel_silent_announce(request: Request) -> Response:
         try:
             payload = await _auth(request, settings)
@@ -535,6 +562,7 @@ def create_app(
         Route("/api/wheel/preview-send", wheel_preview_send, methods=["POST"]),
         Route("/api/wheel/silent-spin", wheel_silent_spin, methods=["POST"]),
         Route("/api/wheel/silent-announce", wheel_silent_announce, methods=["POST"]),
+        Route("/api/wheel/silent-cancel", wheel_silent_cancel, methods=["POST"]),
         Route("/api/wheel/silent-send-results", wheel_silent_send_results, methods=["POST"]),
         Route("/api/wheel/history", wheel_history, methods=["GET"]),
         Route("/api/wheel/post-settings", wheel_post_settings_get, methods=["GET"]),

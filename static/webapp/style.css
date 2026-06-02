@@ -319,6 +319,21 @@ button.primary:not(:disabled):active {
   color: #ffe0e0;
 }
 
+#silent-cancel-wheel {
+  border-color: #7a5a45;
+  background: #2e241c;
+  color: #f0d4b8;
+}
+
+#silent-cancel-wheel:hover:not(:disabled) {
+  border-color: #a87850;
+  color: #fff0e0;
+}
+
+.silent-wheel-actions {
+  align-items: stretch;
+}
+
 .card small {
   color: #aab;
 }

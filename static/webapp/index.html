@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260602e" />
+    <link rel="stylesheet" href="./style.css?v=20260602f" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -135,9 +135,10 @@
           <div id="silent-wheel-winner" class="silent-wheel-winner muted"></div>
           <div id="silent-wheel-results" class="list"></div>
 
-          <div class="row">
+          <div class="row silent-wheel-actions">
             <button id="silent-send-announce" type="button">Отправить анонс в чат</button>
-            <button id="spin-silent" type="button" class="primary">Крутить колесо</button>
+            <button id="spin-silent" type="button" class="primary" disabled>Крутить колесо</button>
+            <button id="silent-cancel-wheel" type="button" class="hidden">Отменить колесо</button>
             <button id="silent-send-results" type="button" disabled>Отправить результаты в чат</button>
           </div>
           <pre id="spin-silent-log" class="log"></pre>
@@ -253,6 +254,6 @@
       </p>
     </div>
 
-    <script src="./app.js?v=20260602e"></script>
+    <script src="./app.js?v=20260602f"></script>
   </body>
 </html>

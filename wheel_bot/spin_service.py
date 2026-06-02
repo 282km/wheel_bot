@@ -220,15 +220,8 @@ async def run_wheel_spin_silent(
     )
     db_roster = [(pid, idx, roster_rows[idx][3]) for idx, pid in enumerate(roster_ids)]
     if session_id is None:
-        sid = await db.create_wheel_session(
-            conn,
-            chat_id=stats_chat_id,
-            depositor_id=depositor_id,
-            deposit_amount=float(deposit_amount),
-            created_by=admin_telegram_id,
-            roster=db_roster,
-            mode="silent",
-            results_sent=False,
+        raise ValueError(
+            "Сначала отправьте анонс в чат. Крутить можно только после анонса по уже созданному колесу."
         )
     else:
         session = await db.get_wheel_session(conn, int(session_id))
@@ -349,3 +342,22 @@ async def send_silent_results(
     await bot.send_message(post_chat_id, finish_text)
     await db.mark_wheel_session_results_sent(conn, session_id)
     return {"ok": True, "session_id": int(session["id"])}
+
+
+async def cancel_silent_wheel(
+    *,
+    conn: Any,
+    stats_chat_id: int,
+    session_id: int,
+) -> dict[str, Any]:
+    session = await db.get_wheel_session(conn, int(session_id))
+    if not session or int(session["chat_id"]) != int(stats_chat_id):
+        raise ValueError("Колесо не найдено")
+    if str(session["mode"]) != "silent":
+        raise ValueError("Отменить можно только колесо в режиме тишины")
+    winners = await db.list_session_winners(conn, int(session_id))
+    if winners:
+        raise ValueError("Колесо уже прокручено — отмена недоступна")
+    if not await db.delete_wheel_session(conn, int(session_id)):
+        raise ValueError("Колесо не найдено")
+    return {"ok": True, "session_id": int(session_id)}
