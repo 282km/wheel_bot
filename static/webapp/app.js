@@ -542,7 +542,7 @@ function paintSilentWheel(roster) {
     .map((p, i) => {
       const angDeg = (i + 0.5) * step - 90;
       const ang = (angDeg * Math.PI) / 180;
-      const radius = 33;
+      const radius = 26;
       const x = 50 + Math.cos(ang) * radius;
       const y = 50 + Math.sin(ang) * radius;
       return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;">${escapeHtml(p.nick)}</div>`;

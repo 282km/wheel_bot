@@ -211,6 +211,7 @@ footer {
 }
 
 .silent-wheel-disc {
+  position: relative;
   width: min(74vw, 360px);
   height: min(74vw, 360px);
   border-radius: 50%;
@@ -242,15 +243,16 @@ footer {
 .silent-wheel-label {
   position: absolute;
   transform: translate(-50%, -50%);
-  font-size: 11px;
-  line-height: 1;
+  font-size: clamp(9px, 2.1vw, 11px);
+  line-height: 1.05;
   font-weight: 600;
   color: #ffffff;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
-  max-width: 86px;
+  max-width: 22%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: center;
   pointer-events: none;
 }
 
