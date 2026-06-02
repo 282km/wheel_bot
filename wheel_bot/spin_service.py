@@ -69,8 +69,11 @@ async def _prepare_spin_data(
 ) -> tuple[list[int], list[tuple[int, str, str, int]], dict[str, str], str, float]:
     if len(selected_ids) < 2:
         raise ValueError("Нужно минимум 2 участника в текущем колесе")
-    if depositor_id not in selected_ids:
-        raise ValueError("«Кто занёс» должен быть среди участников текущего колеса")
+    depositor = await db.get_participant(conn, depositor_id)
+    if not depositor:
+        raise ValueError("Участник «кто занёс» не найден")
+    if depositor.is_hidden:
+        raise ValueError("«Кто занёс» не может быть скрытым участником")
     if not prizes:
         raise ValueError("Укажите хотя бы одного победителя и суммы")
     if len(prizes) > len(selected_ids):
@@ -87,10 +90,7 @@ async def _prepare_spin_data(
         hue = int(idx * 360 / max(1, len(roster_ids))) % 360
         roster_rows.append((p.id, p.poker_nick, p.description, hue))
 
-    depositor = await db.get_participant(conn, depositor_id)
-    depositor_label = (
-        _participant_label(depositor.poker_nick, depositor.description) if depositor else str(depositor_id)
-    )
+    depositor_label = _participant_label(depositor.poker_nick, depositor.description)
     templates = await db.get_message_templates(conn)
     prize_pool = float(sum(prizes))
     return roster_ids, roster_rows, templates, depositor_label, prize_pool

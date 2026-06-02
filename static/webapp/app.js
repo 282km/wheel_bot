@@ -595,15 +595,16 @@ function refreshDepositorSelect(selQuery = "#depositor") {
   opt0.value = "";
   opt0.textContent = "— выберите —";
   sel.appendChild(opt0);
-  for (const id of selectedIds) {
-    const p = participants.find((x) => x.id === id);
-    if (!p) continue;
+  const list = [...participants].sort((a, b) =>
+    String(a.poker_nick || "").localeCompare(String(b.poker_nick || ""), "ru")
+  );
+  for (const p of list) {
     const o = document.createElement("option");
     o.value = String(p.id);
     o.textContent = participantLabel(p);
     sel.appendChild(o);
   }
-  if (prev && selectedIds.includes(prev)) sel.value = String(prev);
+  if (prev && list.some((x) => Number(x.id) === prev)) sel.value = String(prev);
 }
 
 async function reloadParticipants() {
