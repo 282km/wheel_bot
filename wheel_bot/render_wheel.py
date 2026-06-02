@@ -50,6 +50,68 @@ def _text_bbox(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) 
     return float(bb[2] - bb[0]), float(bb[3] - bb[1])
 
 
+def _fit_label_font(
+    draw: ImageDraw.ImageDraw, nick: str, max_w: float, max_font: int, min_font: int
+) -> tuple[str, ImageFont.ImageFont, float, float]:
+    label = _cut(nick, 18)
+    font_size = max_font
+    tw, th = 0.0, 0.0
+    font = _load_font(font_size)
+    while font_size >= min_font:
+        font = _load_font(font_size)
+        tw, th = _text_bbox(draw, label, font)
+        if tw <= max_w:
+            return label, font, tw, th
+        font_size -= 1
+    font = _load_font(min_font)
+    while len(label) > 1:
+        label = label[:-1]
+        tw, th = _text_bbox(draw, f"{label}…", font)
+        if tw <= max_w:
+            return f"{label}…", font, tw, th
+    return label, font, tw, th
+
+
+def _paste_radial_label(
+    img: Image.Image,
+    label: str,
+    font: ImageFont.ImageFont,
+    lx: float,
+    ly: float,
+    mid_rad: float,
+    bbox: tuple[int, int, int, int],
+    start: float,
+    end: float,
+    size: int,
+) -> Image.Image:
+    tw, th = _text_bbox(ImageDraw.Draw(img), label, font)
+    pad = max(4, size // 64)
+    box = int(max(tw, th) + pad * 2)
+    txt = Image.new("RGBA", (box, box), (0, 0, 0, 0))
+    tdraw = ImageDraw.Draw(txt)
+    tdraw.text(
+        (box / 2 - tw / 2, box / 2 - th / 2),
+        label,
+        fill=(255, 255, 255, 255),
+        font=font,
+        stroke_width=max(1, size // 160),
+        stroke_fill=(0, 0, 0, 220),
+    )
+
+    rot_deg = math.degrees(mid_rad)
+    if math.cos(mid_rad) < 0:
+        rot_deg += 180
+    txt = txt.rotate(-rot_deg, expand=True, resample=Image.Resampling.BICUBIC)
+
+    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    layer.paste(txt, (int(lx - txt.width / 2), int(ly - txt.height / 2)), txt)
+
+    sector_mask = Image.new("L", img.size, 0)
+    smask = ImageDraw.Draw(sector_mask)
+    smask.pieslice(bbox, start, end, fill=255)
+    return Image.composite(layer, img, sector_mask)
+
+
 def _wheel_layer(size: int, roster: list[tuple[str, str, int]]) -> Image.Image:
     """
     roster entries: (nick, description, hue_degrees)
@@ -69,17 +131,17 @@ def _wheel_layer(size: int, roster: list[tuple[str, str, int]]) -> Image.Image:
     label_r = outer_r * 0.6
     max_font = max(10, min(17, int(size / (7 + n * 0.45))))
     min_font = max(8, max_font - 6)
-    font = _load_font(max_font)
 
     for i in range(n):
         nick, _desc, hue = roster[i]
         start = -90.0 + i * step_deg
         end = start + step_deg
-        fill = _hue_to_rgb(hue)
-        draw.pieslice(bbox, start, end, fill=fill, outline=(20, 20, 20))
+        r, g, b = _hue_to_rgb(hue)
+        draw.pieslice(bbox, start, end, fill=(r, g, b, 255), outline=(20, 20, 20, 255))
 
     draw.ellipse(bbox, outline=_RING, width=max(2, size // 128))
 
+    measure = ImageDraw.Draw(img)
     for i in range(n):
         nick, _desc, _hue = roster[i]
         start = -90.0 + i * step_deg
@@ -88,39 +150,8 @@ def _wheel_layer(size: int, roster: list[tuple[str, str, int]]) -> Image.Image:
         lx = cx + label_r * math.cos(mid_rad)
         ly = cy + label_r * math.sin(mid_rad)
         max_w = 2 * label_r * math.sin(math.radians(step_deg / 2)) * 0.96
-        label = _cut(nick, 18)
-
-        font_size = max_font
-        tw, th = 0.0, 0.0
-        while font_size >= min_font:
-            font = _load_font(font_size)
-            tw, th = _text_bbox(draw, label, font)
-            if tw <= max_w:
-                break
-            font_size -= 1
-        if tw > max_w:
-            while len(label) > 1:
-                label = label[:-1]
-                tw, th = _text_bbox(draw, f"{label}…", font)
-                if tw <= max_w:
-                    label = f"{label}…"
-                    break
-
-        txt_layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        tdraw = ImageDraw.Draw(txt_layer)
-        tdraw.text(
-            (lx - tw / 2, ly - th / 2),
-            label,
-            fill=(255, 255, 255, 255),
-            font=font,
-            stroke_width=max(1, size // 160),
-            stroke_fill=(0, 0, 0, 220),
-        )
-
-        sector_mask = Image.new("L", (size, size), 0)
-        smask = ImageDraw.Draw(sector_mask)
-        smask.pieslice(bbox, start, end, fill=255)
-        img = Image.composite(txt_layer, img, sector_mask)
+        label, font, _tw, _th = _fit_label_font(measure, nick, max_w, max_font, min_font)
+        img = _paste_radial_label(img, label, font, lx, ly, mid_rad, bbox, start, end, size)
 
     return img
 
@@ -161,7 +192,12 @@ def _final_rotation_degrees(n: int, winner_slot: int, extra_turns: int = 5) -> f
 
 
 def _compose_frame(base: Image.Image, pointer: Image.Image, angle_deg: float, badge: Image.Image | None = None) -> Image.Image:
-    rotated = base.rotate(angle_deg, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=_WHEEL_BG)
+    rotated = base.rotate(
+        angle_deg,
+        resample=Image.Resampling.BICUBIC,
+        expand=False,
+        fillcolor=_WHEEL_BG[:3],
+    )
     composed = Image.alpha_composite(rotated, pointer)
     if badge is not None:
         composed = Image.alpha_composite(composed, badge)
@@ -199,22 +235,16 @@ def _save_gif(frames: list[Image.Image], fps: int) -> bytes:
     if not frames:
         raise ValueError("no frames")
     duration_ms = int(round(1000 / max(1, fps)))
-    out_frames: list[Image.Image] = frames
-    try:
-        pal_img = frames[0].quantize(colors=64, method=Image.Quantize.MEDIANCUT)
-        out_frames = [pal_img] + [im.quantize(palette=pal_img) for im in frames[1:]]
-    except Exception:
-        out_frames = frames
-
     buf = io.BytesIO()
-    out_frames[0].save(
+    frames[0].save(
         buf,
         format="GIF",
         save_all=True,
-        append_images=out_frames[1:],
+        append_images=frames[1:],
         duration=duration_ms,
         loop=0,
         optimize=True,
+        disposal=2,
     )
     return buf.getvalue()
 
