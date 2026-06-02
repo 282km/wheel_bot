@@ -242,7 +242,6 @@ footer {
 
 .silent-wheel-label {
   position: absolute;
-  transform: translate(-50%, -50%);
   font-size: clamp(9px, 2.1vw, 11px);
   line-height: 1.05;
   font-weight: 600;

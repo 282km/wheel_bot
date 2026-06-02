@@ -545,7 +545,12 @@ function paintSilentWheel(roster) {
       const radius = 26;
       const x = 50 + Math.cos(ang) * radius;
       const y = 50 + Math.sin(ang) * radius;
-      return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;">${escapeHtml(p.nick)}</div>`;
+      let textRotate = angDeg;
+      if (textRotate > 90) textRotate -= 180;
+      if (textRotate < -90) textRotate += 180;
+      return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(
+        p.nick
+      )}</div>`;
     })
     .join("");
   disc.innerHTML = `<div class="silent-wheel-labels">${labels}</div>`;
