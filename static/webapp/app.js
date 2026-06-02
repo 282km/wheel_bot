@@ -144,8 +144,8 @@ function buildSilentSegments(roster) {
 
 function silentCanvasCssSize() {
   const wrap = $(".silent-wheel-wrap");
-  const w = wrap ? wrap.clientWidth : 560;
-  return Math.max(260, Math.min(560, w));
+  const w = wrap ? wrap.clientWidth : 680;
+  return Math.max(280, Math.min(680, w));
 }
 
 function ensureSilentCanvas() {
@@ -212,7 +212,7 @@ function drawSilentWheelCanvas(roster) {
   const pad = Math.max(10, css * 0.04);
   const outerR = css / 2 - pad;
   const step = (Math.PI * 2) / n;
-  const labelR = outerR * 0.55;
+  const labelR = outerR * 0.63;
   const fontSize = Math.max(9, Math.min(14, Math.round(css / (n >= 12 ? 34 : 30))));
   ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
   ctx.textBaseline = "middle";
@@ -239,7 +239,7 @@ function drawSilentWheelCanvas(roster) {
     const mid = start + step / 2;
     const lx = cx + labelR * Math.cos(mid);
     const ly = cy + labelR * Math.sin(mid);
-    const maxW = 2 * labelR * Math.sin(step / 2) * 0.9;
+    const maxW = 2 * labelR * Math.sin(step / 2) * 0.96;
     const label = fitCanvasLabel(ctx, String(roster[i].nick || ""), maxW);
 
     ctx.save();
