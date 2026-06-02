@@ -568,10 +568,15 @@ async function animateSilentRound(round) {
   const disc = $("#silent-wheel-disc");
   const winnerLine = $("#silent-wheel-winner");
   if (!disc || !winnerLine) return;
-  const roster = (round.roster || []).map((p) => ({
-    ...p,
-    color: wheelPaletteByHue(p.hue),
-  }));
+  const baseRoster = round.roster || [];
+  const roster = baseRoster.map((p, idx) => {
+    const hue = (idx * 360) / Math.max(1, baseRoster.length);
+    return {
+      ...p,
+      hue,
+      color: wheelPaletteByHue(hue),
+    };
+  });
   const winnerIdx = roster.findIndex((x) => Number(x.id) === Number(round.winner_id));
   if (!roster.length || winnerIdx < 0) return;
   paintSilentWheel(roster);
