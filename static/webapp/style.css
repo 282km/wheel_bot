@@ -212,8 +212,8 @@ footer {
 
 .silent-wheel-disc {
   position: relative;
-  width: min(74vw, 360px);
-  height: min(74vw, 360px);
+  width: min(92vw, 560px);
+  height: min(92vw, 560px);
   border-radius: 50%;
   border: 4px solid #2f3647;
   box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.05), 0 8px 26px rgba(0, 0, 0, 0.35);
@@ -226,6 +226,13 @@ footer {
   color: #d6def0;
   transition: transform 5s cubic-bezier(0.11, 0.72, 0.2, 1);
   overflow: hidden;
+}
+
+@media (max-width: 760px) {
+  .silent-wheel-disc {
+    width: min(96vw, 520px);
+    height: min(96vw, 520px);
+  }
 }
 
 .silent-wheel-empty {
