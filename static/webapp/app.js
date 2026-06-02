@@ -23,6 +23,85 @@ function getTg() {
   return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
 }
 
+let fullscreenEventsWired = false;
+
+function isFullscreenApiSupported() {
+  const tg = getTg();
+  if (!tg || typeof tg.requestFullscreen !== "function") return false;
+  if (typeof tg.isVersionAtLeast === "function") return tg.isVersionAtLeast("8.0");
+  return true;
+}
+
+function isTgFullscreen() {
+  const tg = getTg();
+  return Boolean(tg && tg.isFullscreen);
+}
+
+function updateFullscreenHomeButton() {
+  const btn = $("#home-fullscreen-btn");
+  const hint = $("#home-fullscreen-hint");
+  if (!btn) return;
+  if (!isFullscreenApiSupported()) {
+    btn.disabled = true;
+    btn.textContent = "На весь экран";
+    if (hint) {
+      hint.textContent =
+        "Недоступно: обновите Telegram (Desktop или телефон) до версии с Mini Apps 2.0.";
+    }
+    return;
+  }
+  btn.disabled = false;
+  if (hint) hint.textContent = "Удобно на ПК: разворачивает Mini App внутри Telegram.";
+  btn.textContent = isTgFullscreen() ? "Выйти из полноэкранного режима" : "На весь экран";
+}
+
+function toggleTgFullscreen() {
+  const tg = getTg();
+  if (!tg) {
+    tgAlert("Откройте приложение через Telegram, не в браузере.");
+    return;
+  }
+  if (!isFullscreenApiSupported()) {
+    tgAlert("Полный экран не поддерживается этой версией Telegram. Обновите клиент.");
+    return;
+  }
+  try {
+    if (isTgFullscreen()) {
+      tg.exitFullscreen();
+    } else {
+      tg.expand();
+      tg.requestFullscreen();
+    }
+  } catch (err) {
+    tgAlert(String(err && err.message ? err.message : err));
+  }
+  updateFullscreenHomeButton();
+}
+
+function wireFullscreenHomeEvents() {
+  if (fullscreenEventsWired) return;
+  const tg = getTg();
+  if (!tg || typeof tg.onEvent !== "function") return;
+  fullscreenEventsWired = true;
+  tg.onEvent("fullscreenChanged", () => updateFullscreenHomeButton());
+  tg.onEvent("fullscreenFailed", (payload) => {
+    const code = payload && payload.error ? payload.error : "UNKNOWN";
+    if (code !== "ALREADY_FULLSCREEN") {
+      tgAlert(`Не удалось включить полный экран (${code}).`);
+    }
+    updateFullscreenHomeButton();
+  });
+}
+
+function bindFullscreenHomeButton() {
+  wireFullscreenHomeEvents();
+  const btn = $("#home-fullscreen-btn");
+  if (!btn || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", () => toggleTgFullscreen());
+  updateFullscreenHomeButton();
+}
+
 function onClick(sel, handler) {
   const el = typeof sel === "string" ? $(sel) : sel;
   if (el) el.addEventListener("click", handler);
@@ -669,6 +748,7 @@ function setTab(name) {
   $("#tab-history").classList.toggle("hidden", name !== "history");
   $("#tab-templates").classList.toggle("hidden", name !== "templates");
   $("#tab-admins").classList.toggle("hidden", name !== "admins");
+  if (name === "home") updateFullscreenHomeButton();
   if (name === "history") {
     reloadHistory().catch((e) => {
       const tg = window.Telegram && window.Telegram.WebApp;
@@ -808,6 +888,14 @@ function bindWheelPostSettings() {
   }
 }
 
+function homeFullscreenBlockHtml() {
+  return `
+      <div class="home-fullscreen-block">
+        <button id="home-fullscreen-btn" type="button" class="primary home-fullscreen-btn">На весь экран</button>
+        <p id="home-fullscreen-hint" class="muted home-fullscreen-hint"></p>
+      </div>`;
+}
+
 function renderHome(roleName) {
   const root = $("#home-content");
   if (!root) return;
@@ -818,7 +906,9 @@ function renderHome(roleName) {
         Используйте вкладки для управления участниками, запуском колеса, историей и шаблонами сообщений.
         Настройка канала и тесты — во вкладке «Админ».
       </div>
+      ${homeFullscreenBlockHtml()}
     `;
+    bindFullscreenHomeButton();
     return;
   }
   root.innerHTML = `
@@ -826,7 +916,9 @@ function renderHome(roleName) {
     <div class="muted" style="margin-top:8px">
       У вас нет прав для работы с приложением. Обратитесь к суперадмину.
     </div>
+    ${homeFullscreenBlockHtml()}
   `;
+  bindFullscreenHomeButton();
 }
 
 function fmtMoney(x) {
