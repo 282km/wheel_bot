@@ -3,13 +3,14 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-def _parse_ids(raw: str | None) -> set[int]:
+def _parse_ids(raw: Optional[str]) -> set[int]:
     if not raw:
         return set()
     out: set[int] = set()
@@ -33,8 +34,8 @@ class Settings:
     static_dir: Path
     database_path: Path
     forwarded_allow_ips: str
-    ssl_certfile: str | None
-    ssl_keyfile: str | None
+    ssl_certfile: Optional[str]
+    ssl_keyfile: Optional[str]
     webhook_path: str
     webhook_secret: str
 

@@ -10,6 +10,7 @@ from colorsys import hls_to_rgb
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from typing import Optional, Union
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ def _hue_to_rgb(hue_deg: int) -> tuple[int, int, int]:
     return int(r * 255), int(g * 255), int(b * 255)
 
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def _load_font(size: int) -> Union[ImageFont.FreeTypeFont, ImageFont.ImageFont]:
     candidates = [
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
         Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
@@ -240,7 +241,7 @@ def _final_rotation_degrees(n: int, winner_slot: int, extra_turns: int = 5) -> f
     return extra_turns * 360.0 + ((mid_w - target) % 360.0)
 
 
-def _compose_frame(base: Image.Image, pointer: Image.Image, angle_deg: float, badge: Image.Image | None = None) -> Image.Image:
+def _compose_frame(base: Image.Image, pointer: Image.Image, angle_deg: float, badge: Optional[Image.Image] = None) -> Image.Image:
     rotated = base.rotate(angle_deg, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=_WHEEL_BG_RGB)
     composed = Image.alpha_composite(rotated.convert("RGBA"), pointer)
     if badge is not None:

@@ -20,7 +20,7 @@ def _fmt_template(template: str, **kwargs: Any) -> str:
     return str(template).format_map(_SafeDict(**kwargs))
 
 
-def _participant_label(nick: str, description: str | None) -> str:
+def _participant_label(nick: str, description: Optional[str]) -> str:
     d = str(description or "").strip()
     return f"{nick} ({d})" if d else str(nick)
 

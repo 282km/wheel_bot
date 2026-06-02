@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, Optional
 
 PeriodKey = Literal["all", "prev_year", "cur_year", "prev_month", "cur_month"]
 
 
 @dataclass(frozen=True)
 class PeriodRange:
-    start_iso: str | None  # inclusive
-    end_iso: str | None  # exclusive
+    start_iso: Optional[str]  # inclusive
+    end_iso: Optional[str]  # exclusive
 
 
 def _iso(d: datetime) -> str:

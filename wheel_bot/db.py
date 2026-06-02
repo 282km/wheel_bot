@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+from typing import Optional
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -111,7 +112,7 @@ async def bootstrap_users(conn: aiosqlite.Connection, superadmin_ids: set[int]) 
     await conn.commit()
 
 
-async def ensure_user(conn: aiosqlite.Connection, telegram_id: int, role: str | None = None) -> str:
+async def ensure_user(conn: aiosqlite.Connection, telegram_id: int, role: Optional[str] = None) -> str:
     row = await (await conn.execute("SELECT role FROM users WHERE telegram_id = ?", (telegram_id,))).fetchone()
     if row:
         return str(row["role"])
@@ -125,7 +126,7 @@ async def ensure_user(conn: aiosqlite.Connection, telegram_id: int, role: str | 
     return r
 
 
-async def get_role(conn: aiosqlite.Connection, telegram_id: int) -> str | None:
+async def get_role(conn: aiosqlite.Connection, telegram_id: int) -> Optional[str]:
     row = await (await conn.execute("SELECT role FROM users WHERE telegram_id = ?", (telegram_id,))).fetchone()
     return str(row["role"]) if row else None
 
@@ -175,9 +176,9 @@ async def insert_participant(conn: aiosqlite.Connection, poker_nick: str, descri
 async def update_participant(
     conn: aiosqlite.Connection,
     pid: int,
-    poker_nick: str | None,
-    description: str | None,
-    is_hidden: bool | None = None,
+    poker_nick: Optional[str],
+    description: Optional[str],
+    is_hidden: Optional[bool] = None,
 ) -> None:
     fields: list[str] = []
     vals: list[Any] = []
@@ -221,7 +222,7 @@ async def delete_participant(conn: aiosqlite.Connection, pid: int) -> bool:
     return True
 
 
-async def get_kv(conn: aiosqlite.Connection, key: str, default: str | None = None) -> str | None:
+async def get_kv(conn: aiosqlite.Connection, key: str, default: Optional[str] = None) -> Optional[str]:
     row = await (await conn.execute("SELECT value FROM app_kv WHERE key = ?", (key,))).fetchone()
     if not row:
         return default
@@ -305,7 +306,7 @@ async def add_spin(conn: aiosqlite.Connection, session_id: int, round_index: int
     await conn.commit()
 
 
-async def get_participant(conn: aiosqlite.Connection, pid: int) -> ParticipantRow | None:
+async def get_participant(conn: aiosqlite.Connection, pid: int) -> Optional[ParticipantRow]:
     row = await (
         await conn.execute("SELECT id, poker_nick, description, is_hidden FROM participants WHERE id = ?", (pid,))
     ).fetchone()
@@ -381,7 +382,7 @@ async def list_wheel_history(conn: aiosqlite.Connection, chat_id: int, limit: in
     return out
 
 
-async def get_wheel_session(conn: aiosqlite.Connection, session_id: int) -> dict[str, Any] | None:
+async def get_wheel_session(conn: aiosqlite.Connection, session_id: int) -> Optional[dict[str, Any]]:
     row = await (
         await conn.execute(
             """

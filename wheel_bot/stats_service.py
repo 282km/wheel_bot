@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 import aiosqlite
 
 from wheel_bot.periods import PeriodKey, resolve_period
 
 
-def _label(nick: str, desc: str | None) -> str:
+def _label(nick: str, desc: Optional[str]) -> str:
     d = str(desc or "").strip()
     return f"{nick} ({d})" if d else str(nick)
 
