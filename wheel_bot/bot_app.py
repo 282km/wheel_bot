@@ -55,7 +55,7 @@ def _format_stats_block(data: dict[str, Any]) -> str:
         "",
         f"🎡 Колес за период: {data.get('wheels_count', 0)}",
         f"💰 Сумма заносов: {_fmt_money(float(data.get('deposits_sum', 0)))}",
-        f"🏦 Сумма призовых: {_fmt_money(float(data.get('prizes_sum', 0)))}",
+        f"🏦 Сумма колес: {_fmt_money(float(data.get('prizes_sum', 0)))}",
         "",
         "💸 Топ-5 по сумме заносов:",
     ]
