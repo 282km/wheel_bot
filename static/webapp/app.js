@@ -230,7 +230,14 @@ function renderPoolAndPicked() {
     .map((id, idx) => {
       const p = participants.find((x) => x.id === id);
       if (!p) return null;
-      return { id: p.id, nick: p.poker_nick, description: p.description || "", hue: (idx * 360) / Math.max(1, selectedIds.length) };
+      const hue = (idx * 360) / Math.max(1, selectedIds.length);
+      return {
+        id: p.id,
+        nick: p.poker_nick,
+        description: p.description || "",
+        hue,
+        color: wheelPaletteByHue(hue),
+      };
     })
     .filter(Boolean);
   paintSilentWheel(rosterPreview);
@@ -515,7 +522,7 @@ function renderSilentRosterList(roster) {
   root.innerHTML = roster
     .map(
       (p, idx) =>
-        `<span class="silent-roster-item"><span class="silent-roster-dot" style="background:${wheelPaletteByHue(
+        `<span class="silent-roster-item"><span class="silent-roster-dot" style="background:${p.color || wheelPaletteByHue(
           p.hue
         )}"></span>${idx + 1}. ${escapeHtml(p.nick)}</span>`
     )
@@ -536,7 +543,7 @@ function paintSilentWheel(roster) {
   for (let i = 0; i < roster.length; i += 1) {
     const s = i * step;
     const e = (i + 1) * step;
-    chunks.push(`${wheelPaletteByHue(roster[i].hue)} ${s}deg ${e}deg`);
+    chunks.push(`${roster[i].color || wheelPaletteByHue(roster[i].hue)} ${s}deg ${e}deg`);
   }
   const labels = roster
     .map((p, i) => {
@@ -561,7 +568,10 @@ async function animateSilentRound(round) {
   const disc = $("#silent-wheel-disc");
   const winnerLine = $("#silent-wheel-winner");
   if (!disc || !winnerLine) return;
-  const roster = round.roster || [];
+  const roster = (round.roster || []).map((p) => ({
+    ...p,
+    color: wheelPaletteByHue(p.hue),
+  }));
   const winnerIdx = roster.findIndex((x) => Number(x.id) === Number(round.winner_id));
   if (!roster.length || winnerIdx < 0) return;
   paintSilentWheel(roster);
