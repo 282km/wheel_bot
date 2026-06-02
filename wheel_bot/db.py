@@ -451,6 +451,58 @@ async def delete_wheel_session(conn: aiosqlite.Connection, session_id: int) -> b
     return True
 
 
+async def renumber_wheel_session(
+    conn: aiosqlite.Connection,
+    from_id: int,
+    to_id: int,
+    *,
+    replace_target: bool = False,
+) -> None:
+    """Переносит колесо from_id -> to_id (roster, spins, запись сессии)."""
+    src_id = int(from_id)
+    dst_id = int(to_id)
+    if src_id == dst_id:
+        return
+    if not await get_wheel_session(conn, src_id):
+        raise ValueError(f"Колесо #{src_id} не найдено")
+    if await get_wheel_session(conn, dst_id):
+        if not replace_target:
+            raise ValueError(f"Колесо #{dst_id} уже существует (используйте replace_target=True)")
+        await delete_wheel_session(conn, dst_id)
+
+    await conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        await conn.execute(
+            "UPDATE wheel_session_roster SET session_id = ? WHERE session_id = ?",
+            (dst_id, src_id),
+        )
+        await conn.execute(
+            "UPDATE wheel_spins SET session_id = ? WHERE session_id = ?",
+            (dst_id, src_id),
+        )
+        await conn.execute(
+            "UPDATE wheel_sessions SET id = ? WHERE id = ?",
+            (dst_id, src_id),
+        )
+        await conn.commit()
+    finally:
+        await conn.execute("PRAGMA foreign_keys=ON")
+
+
+async def sync_wheel_session_autoincrement(conn: aiosqlite.Connection) -> int:
+    """Выставляет AUTOINCREMENT так, чтобы следующее колесо было max(id)+1."""
+    row = await (await conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM wheel_sessions")).fetchone()
+    max_id = int(row["m"])
+    await conn.execute("DELETE FROM sqlite_sequence WHERE name = 'wheel_sessions'")
+    if max_id > 0:
+        await conn.execute(
+            "INSERT INTO sqlite_sequence (name, seq) VALUES ('wheel_sessions', ?)",
+            (max_id,),
+        )
+    await conn.commit()
+    return max_id + 1
+
+
 MESSAGE_TEMPLATE_DEFAULTS: dict[str, str] = {
     "announce": (
         "🎡 Стартует колесо #{wheel_id}\n"
