@@ -234,6 +234,7 @@ function renderPoolAndPicked() {
     })
     .filter(Boolean);
   paintSilentWheel(rosterPreview);
+  renderSilentRosterList(rosterPreview);
 }
 
 function renderWheelRoster(poolSel, pickedSel, depositorSel) {
@@ -502,6 +503,23 @@ function renderSilentResults(items) {
     div.innerHTML = `<strong>${it.round}. ${escapeHtml(it.winner_nick)}</strong> <small>— ${fmtMoney(it.prize)}</small>`;
     root.appendChild(div);
   }
+}
+
+function renderSilentRosterList(roster) {
+  const root = $("#silent-wheel-roster");
+  if (!root) return;
+  if (!roster || !roster.length) {
+    root.innerHTML = '<small>Состав пока пустой.</small>';
+    return;
+  }
+  root.innerHTML = roster
+    .map(
+      (p, idx) =>
+        `<span class="silent-roster-item"><span class="silent-roster-dot" style="background:${wheelPaletteByHue(
+          p.hue
+        )}"></span>${idx + 1}. ${escapeHtml(p.nick)}</span>`
+    )
+    .join("");
 }
 
 function paintSilentWheel(roster) {

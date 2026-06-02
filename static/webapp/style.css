@@ -234,6 +234,32 @@ footer {
   font-size: 16px;
 }
 
+.silent-wheel-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.silent-roster-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #3a3f52;
+  border-radius: 999px;
+  background: #151923;
+  color: #d6def0;
+  font-size: 13px;
+}
+
+.silent-roster-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
 .silent-winner-card {
   border: 1px solid #3a3f52;
   border-radius: 10px;
