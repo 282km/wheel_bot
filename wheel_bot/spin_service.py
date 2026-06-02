@@ -20,6 +20,11 @@ def _fmt_template(template: str, **kwargs: Any) -> str:
     return str(template).format_map(_SafeDict(**kwargs))
 
 
+def _participant_label(nick: str, description: str | None) -> str:
+    d = str(description or "").strip()
+    return f"{nick} ({d})" if d else str(nick)
+
+
 async def _prepare_spin_data(
     conn: Any,
     admin_telegram_id: int,
@@ -49,7 +54,9 @@ async def _prepare_spin_data(
         roster_rows.append((p.id, p.poker_nick, p.description, hue))
 
     depositor = await db.get_participant(conn, depositor_id)
-    depositor_label = depositor.poker_nick if depositor else str(depositor_id)
+    depositor_label = (
+        _participant_label(depositor.poker_nick, depositor.description) if depositor else str(depositor_id)
+    )
     templates = await db.get_message_templates(conn)
     prize_pool = float(sum(prizes))
     return roster_ids, roster_rows, templates, depositor_label, prize_pool
@@ -114,7 +121,7 @@ async def run_wheel_spin(
         gif_bytes = render_spin_gif(gif_roster, winner_slot=winner_slot)
 
         pwin = await db.get_participant(conn, winner_id)
-        nick = pwin.poker_nick if pwin else str(winner_id)
+        nick = _participant_label(pwin.poker_nick, pwin.description) if pwin else str(winner_id)
         caption = _fmt_template(
             templates["round_caption"], round=rnd, winner=nick, prize=f"{float(prize):g}", wheel_id=sid
         )
@@ -134,7 +141,7 @@ async def run_wheel_spin(
     summary_lines = []
     for item in results:
         pw = await db.get_participant(conn, int(item["winner_id"]))
-        nn = pw.poker_nick if pw else str(item["winner_id"])
+        nn = _participant_label(pw.poker_nick, pw.description) if pw else str(item["winner_id"])
         summary_lines.append(f"— {nn}: ${item['prize']:g}")
     finish_text = _fmt_template(
         templates["finish"],
@@ -200,7 +207,7 @@ async def run_wheel_spin_silent(
                 "round": rnd,
                 "prize": float(prize),
                 "winner_id": winner_id,
-                "winner_nick": str(winner_row[1]),
+                "winner_nick": _participant_label(str(winner_row[1]), str(winner_row[2])),
                 "roster": round_roster,
             }
         )
@@ -229,10 +236,12 @@ async def send_silent_results(
 
     winners = await db.list_session_winners(conn, session_id)
     depositor = await db.get_participant(conn, int(session["depositor_id"]))
-    depositor_label = depositor.poker_nick if depositor else str(session["depositor_id"])
+    depositor_label = (
+        _participant_label(depositor.poker_nick, depositor.description) if depositor else str(session["depositor_id"])
+    )
     templates = await db.get_message_templates(conn)
 
-    winner_lines = [f"— {str(w['winner_nick'])}: ${float(w['prize']):g}" for w in winners]
+    winner_lines = [f"— {str(w['winner_label'])}: ${float(w['prize']):g}" for w in winners]
     finish_text = _fmt_template(
         templates["finish"],
         wheel_id=int(session["id"]),

@@ -407,7 +407,7 @@ async def get_wheel_session(conn: aiosqlite.Connection, session_id: int) -> dict
 async def list_session_winners(conn: aiosqlite.Connection, session_id: int) -> list[dict[str, Any]]:
     cur = await conn.execute(
         """
-        SELECT w.round_index, w.winner_id, w.prize_amount, p.poker_nick
+        SELECT w.round_index, w.winner_id, w.prize_amount, p.poker_nick, p.description
         FROM wheel_spins w
         JOIN participants p ON p.id = w.winner_id
         WHERE w.session_id = ?
@@ -421,6 +421,11 @@ async def list_session_winners(conn: aiosqlite.Connection, session_id: int) -> l
             "round": int(r["round_index"]),
             "winner_id": int(r["winner_id"]),
             "winner_nick": str(r["poker_nick"]),
+            "winner_label": (
+                f"{str(r['poker_nick'])} ({str(r['description']).strip()})"
+                if str(r["description"]).strip()
+                else str(r["poker_nick"])
+            ),
             "prize": float(r["prize_amount"]),
         }
         for r in rows

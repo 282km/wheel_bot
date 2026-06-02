@@ -7,6 +7,11 @@ import aiosqlite
 from wheel_bot.periods import PeriodKey, resolve_period
 
 
+def _label(nick: str, desc: str | None) -> str:
+    d = str(desc or "").strip()
+    return f"{nick} ({d})" if d else str(nick)
+
+
 async def stats_summary(conn: aiosqlite.Connection, chat_id: int, period: PeriodKey) -> dict[str, Any]:
     pr = resolve_period(period)
     date_clause_ws = ""
@@ -49,7 +54,7 @@ async def stats_summary(conn: aiosqlite.Connection, chat_id: int, period: Period
 
 async def _top_depositors(conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]) -> list[dict[str, Any]]:
     sql = f"""
-    SELECT p.poker_nick AS nick, SUM(s.deposit_amount) AS total
+    SELECT p.poker_nick AS nick, p.description AS description, SUM(s.deposit_amount) AS total
     FROM wheel_sessions s
     JOIN participants p ON p.id = s.depositor_id
     WHERE s.chat_id = ?{_date_clause_for_alias(params_date, "s")}
@@ -60,12 +65,12 @@ async def _top_depositors(conn: aiosqlite.Connection, chat_id: int, date_clause:
     params: list[Any] = [chat_id, *params_date]
     cur = await conn.execute(sql, params)
     rows = await cur.fetchall()
-    return [{"nick": str(r["nick"]), "amount": float(r["total"])} for r in rows]
+    return [{"nick": _label(str(r["nick"]), r["description"]), "amount": float(r["total"])} for r in rows]
 
 
 async def _top_win_sum(conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]) -> list[dict[str, Any]]:
     sql = f"""
-    SELECT p.poker_nick AS nick, SUM(w.prize_amount) AS total
+    SELECT p.poker_nick AS nick, p.description AS description, SUM(w.prize_amount) AS total
     FROM wheel_spins w
     JOIN wheel_sessions s ON s.id = w.session_id
     JOIN participants p ON p.id = w.winner_id
@@ -77,12 +82,12 @@ async def _top_win_sum(conn: aiosqlite.Connection, chat_id: int, date_clause: st
     params: list[Any] = [chat_id, *params_date]
     cur = await conn.execute(sql, params)
     rows = await cur.fetchall()
-    return [{"nick": str(r["nick"]), "amount": float(r["total"])} for r in rows]
+    return [{"nick": _label(str(r["nick"]), r["description"]), "amount": float(r["total"])} for r in rows]
 
 
 async def _top_win_cnt(conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]) -> list[dict[str, Any]]:
     sql = f"""
-    SELECT p.poker_nick AS nick, COUNT(*) AS cnt
+    SELECT p.poker_nick AS nick, p.description AS description, COUNT(*) AS cnt
     FROM wheel_spins w
     JOIN wheel_sessions s ON s.id = w.session_id
     JOIN participants p ON p.id = w.winner_id
@@ -94,14 +99,14 @@ async def _top_win_cnt(conn: aiosqlite.Connection, chat_id: int, date_clause: st
     params: list[Any] = [chat_id, *params_date]
     cur = await conn.execute(sql, params)
     rows = await cur.fetchall()
-    return [{"nick": str(r["nick"]), "wins": int(r["cnt"])} for r in rows]
+    return [{"nick": _label(str(r["nick"]), r["description"]), "wins": int(r["cnt"])} for r in rows]
 
 
 async def _top_allocated_by_depositor(
     conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]
 ) -> list[dict[str, Any]]:
     sql = f"""
-    SELECT p.poker_nick AS nick, COALESCE(SUM(w.prize_amount), 0) AS total
+    SELECT p.poker_nick AS nick, p.description AS description, COALESCE(SUM(w.prize_amount), 0) AS total
     FROM wheel_sessions s
     JOIN participants p ON p.id = s.depositor_id
     LEFT JOIN wheel_spins w ON w.session_id = s.id
@@ -113,7 +118,7 @@ async def _top_allocated_by_depositor(
     params: list[Any] = [chat_id, *params_date]
     cur = await conn.execute(sql, params)
     rows = await cur.fetchall()
-    return [{"nick": str(r["nick"]), "amount": float(r["total"])} for r in rows]
+    return [{"nick": _label(str(r["nick"]), r["description"]), "amount": float(r["total"])} for r in rows]
 
 
 def _date_clause_for_alias(params_date: list[Any], alias: str) -> str:
