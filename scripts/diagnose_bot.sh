@@ -9,8 +9,8 @@ pwd
 ls -la .env 2>/dev/null || echo "NO .env file"
 
 echo ""
-echo "=== TARGET_CHAT_ID in .env ==="
-grep -n 'TARGET_CHAT_ID' .env 2>/dev/null || echo "(no TARGET_CHAT_ID line)"
+echo "=== chat / channel IDs in .env ==="
+grep -nE '^(TARGET_CHAT_ID|WHEEL_CHANNEL_ID)=' .env 2>/dev/null || echo "(no TARGET_CHAT_ID / WHEEL_CHANNEL_ID lines)"
 
 echo ""
 echo "=== systemd (override env?) ==="
@@ -36,3 +36,6 @@ else
   exit 1
 fi
 $PY scripts/verify_startup.py
+echo ""
+echo "=== effective destinations ==="
+$PY scripts/show_effective_destinations.py 2>/dev/null || echo "(show_effective_destinations failed — git pull for script fix)"
