@@ -141,6 +141,12 @@ function buildSilentSegments(roster) {
   });
 }
 
+function wheelNickShort(nick) {
+  const s = String(nick || "").trim();
+  if (s.length <= 8) return s;
+  return `${s.slice(0, 7)}…`;
+}
+
 function renderParticipants() {
   const root = $("#plist");
   root.innerHTML = "";
@@ -545,7 +551,7 @@ function paintSilentWheel(roster) {
     .map((p, i) => {
       const angDeg = (i + 0.5) * step - 90;
       const ang = (angDeg * Math.PI) / 180;
-      const radius = roster.length >= 12 ? 35 : roster.length >= 9 ? 37 : 39;
+      const radius = roster.length >= 12 ? 36 : roster.length >= 9 ? 38 : 40;
       const x = 50 + Math.cos(ang) * radius;
       const y = 50 + Math.sin(ang) * radius;
       // Align text along the slice axis.
@@ -553,11 +559,13 @@ function paintSilentWheel(roster) {
       if (textRotate > 90) textRotate -= 180;
       if (textRotate < -90) textRotate += 180;
       const halfStepRad = (Math.PI / 180) * (step / 2);
-      const chordPct = Math.max(8, Math.min(24, 2 * radius * Math.sin(halfStepRad) * 0.86));
-      const fontPx = roster.length >= 12 ? 8 : roster.length >= 9 ? 9 : 10;
+      const chordPct = Math.max(7, Math.min(16, 2 * radius * Math.sin(halfStepRad) * 0.72));
+      const fontPx = roster.length >= 12 ? 7 : roster.length >= 9 ? 8 : 9;
       return `<div class="silent-wheel-label" style="left:${x}%;top:${y}%;max-width:${chordPct.toFixed(
         1
-      )}%;font-size:${fontPx}px;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(p.nick)}</div>`;
+      )}%;font-size:${fontPx}px;transform:translate(-50%, -50%) rotate(${textRotate}deg);">${escapeHtml(
+        wheelNickShort(p.nick)
+      )}</div>`;
     })
     .join("");
   disc.innerHTML = `<div class="silent-wheel-labels">${labels}</div>`;
@@ -578,7 +586,6 @@ async function animateSilentRound(round) {
   const stopDeg = -((winnerIdx + 0.5) * seg);
   const extraTurns = 360 * 7;
   const total = extraTurns + stopDeg;
-  const winnerColor = wheelPaletteByHue(roster[winnerIdx].hue);
   disc.style.transition = "none";
   disc.style.transform = "rotate(0deg)";
   // force style flush
@@ -589,7 +596,7 @@ async function animateSilentRound(round) {
   await sleep(5000);
   winnerLine.innerHTML = `Раунд ${round.round}: <strong>${escapeHtml(round.winner_nick)}</strong> — ${fmtMoney(
     round.prize
-  )} <span style="color:${winnerColor}">●</span>`;
+  )}`;
   await sleep(5000);
 }
 
