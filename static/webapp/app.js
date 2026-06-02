@@ -252,7 +252,6 @@ function renderPoolAndPicked() {
     .filter(Boolean);
   silentCurrentSegments = buildSilentSegments(rosterPreview);
   paintSilentWheel(silentCurrentSegments);
-  renderSilentRosterList(silentCurrentSegments);
 }
 
 function renderWheelRoster(poolSel, pickedSel, depositorSel) {
@@ -523,29 +522,13 @@ function renderSilentResults(items) {
   }
 }
 
-function renderSilentRosterList(roster) {
-  const root = $("#silent-wheel-roster");
-  if (!root) return;
-  if (!roster || !roster.length) {
-    root.innerHTML = '<small>Состав пока пустой.</small>';
-    return;
-  }
-  root.innerHTML = roster
-    .map(
-      (p, idx) =>
-        `<span class="silent-roster-item"><span class="silent-roster-dot" style="background:${p.color || wheelPaletteByHue(
-          p.hue
-        )}"></span>${idx + 1}. ${escapeHtml(p.nick)}</span>`
-    )
-    .join("");
-}
-
 function paintSilentWheel(roster) {
   const disc = $("#silent-wheel-disc");
   if (!disc) return;
   // Keep static preview aligned with legend colors.
   disc.style.transition = "none";
   disc.style.transform = "rotate(0deg)";
+  void disc.offsetWidth;
   if (!roster || !roster.length) {
     disc.style.background = "#1a1e2a";
     disc.innerHTML = '<div class="silent-wheel-empty">Добавьте участников и нажмите «Крутить колесо»</div>';
@@ -562,7 +545,7 @@ function paintSilentWheel(roster) {
     .map((p, i) => {
       const angDeg = (i + 0.5) * step - 90;
       const ang = (angDeg * Math.PI) / 180;
-      const radius = 31;
+      const radius = 27;
       const x = 50 + Math.cos(ang) * radius;
       const y = 50 + Math.sin(ang) * radius;
       let textRotate = angDeg;
@@ -587,7 +570,6 @@ async function animateSilentRound(round) {
   const winnerIdx = roster.findIndex((x) => Number(x.id) === Number(round.winner_id));
   if (!roster.length || winnerIdx < 0) return;
   paintSilentWheel(roster);
-  renderSilentRosterList(roster);
   const seg = 360 / roster.length;
   const stopDeg = -((winnerIdx + 0.5) * seg);
   const extraTurns = 360 * 7;
