@@ -438,6 +438,19 @@ async def mark_wheel_session_results_sent(conn: aiosqlite.Connection, session_id
     await conn.commit()
 
 
+async def delete_wheel_session(conn: aiosqlite.Connection, session_id: int) -> bool:
+    """Удаляет одно колесо и связанные roster/spins (CASCADE)."""
+    sid = int(session_id)
+    row = await (
+        await conn.execute("SELECT id FROM wheel_sessions WHERE id = ?", (sid,))
+    ).fetchone()
+    if not row:
+        return False
+    await conn.execute("DELETE FROM wheel_sessions WHERE id = ?", (sid,))
+    await conn.commit()
+    return True
+
+
 MESSAGE_TEMPLATE_DEFAULTS: dict[str, str] = {
     "announce": (
         "🎡 Стартует колесо #{wheel_id}\n"
