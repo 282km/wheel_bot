@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260213a" />
+    <link rel="stylesheet" href="./style.css?v=20260602a" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -188,6 +188,32 @@
         <section id="tab-admins" class="panel hidden">
           <h2>Админ</h2>
           <div class="card" style="margin-bottom:12px">
+            <div><strong>ID чата и канала</strong></div>
+            <p class="muted" style="margin:6px 0 10px; font-size:13px">
+              Чат — статистика (/stat) и история в приложении. Канал — посты колеса, если включён постинг в канал.
+            </p>
+            <div class="muted" style="margin:0 0 4px">ID чата</div>
+            <input
+              id="cfg-stats-chat-id"
+              type="text"
+              inputmode="numeric"
+              placeholder="-100…"
+              autocomplete="off"
+              style="width:100%; margin-bottom:10px"
+            />
+            <div class="muted" style="margin:0 0 4px">ID канала</div>
+            <input
+              id="cfg-wheel-channel-id"
+              type="text"
+              inputmode="numeric"
+              placeholder="-100… (можно оставить пустым)"
+              autocomplete="off"
+              style="width:100%; margin-bottom:10px"
+            />
+            <button id="cfg-chat-ids-save" type="button">Сохранить ID</button>
+            <p id="cfg-chat-ids-status" class="muted" style="margin:8px 0 0; font-size:13px"></p>
+          </div>
+          <div class="card" style="margin-bottom:12px">
             <div><strong>Куда постить колесо</strong></div>
             <label class="row" style="margin:10px 0 8px; cursor:pointer">
               <input id="wheel-post-to-channel" type="checkbox" checked />
@@ -199,7 +225,7 @@
               <button id="admin-test-chat" type="button">Тест в чат</button>
             </div>
             <p class="muted" style="margin:8px 0 0; font-size:13px">
-              Статистика (/stat) и история в WebApp всегда по чату (TARGET_CHAT_ID).
+              Статистика (/stat) и история в WebApp привязаны к ID чата выше.
             </p>
           </div>
           <div id="admin-mgmt-block">
@@ -226,6 +252,6 @@
       </p>
     </div>
 
-    <script src="./app.js?v=20260213a"></script>
+    <script src="./app.js?v=20260602a"></script>
   </body>
 </html>

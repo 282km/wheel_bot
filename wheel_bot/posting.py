@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
 
 WHEEL_POST_TARGET_KEY = "wheel_post_target"
+CFG_STATS_CHAT_ID = "cfg_stats_chat_id"
+CFG_WHEEL_CHANNEL_ID = "cfg_wheel_channel_id"
 
 
 async def get_wheel_post_target(conn) -> str:
@@ -23,36 +25,73 @@ async def set_wheel_post_target(conn, target: str) -> None:
     await db.set_kv(conn, WHEEL_POST_TARGET_KEY, mode)
 
 
+async def get_effective_stats_chat_id(conn, settings: "Settings") -> int:
+    raw = await db.get_kv(conn, CFG_STATS_CHAT_ID, None)
+    if raw is not None and str(raw).strip():
+        return int(str(raw).strip())
+    return int(settings.target_chat_id)
+
+
+async def get_effective_wheel_channel_id(conn, settings: "Settings") -> Optional[int]:
+    raw = await db.get_kv(conn, CFG_WHEEL_CHANNEL_ID, None)
+    if raw is not None:
+        s = str(raw).strip()
+        if not s or s.lower() in ("none", "null"):
+            return None
+        return int(s)
+    return settings.wheel_channel_id
+
+
+async def set_configured_chat_ids(
+    conn,
+    stats_chat_id: int,
+    channel_chat_id: Optional[int],
+) -> None:
+    await db.set_kv(conn, CFG_STATS_CHAT_ID, str(int(stats_chat_id)))
+    if channel_chat_id is None:
+        await db.set_kv(conn, CFG_WHEEL_CHANNEL_ID, "")
+    else:
+        await db.set_kv(conn, CFG_WHEEL_CHANNEL_ID, str(int(channel_chat_id)))
+
+
 async def resolve_wheel_destinations(
     conn,
     settings: "Settings",
 ) -> tuple[int, int, str]:
     """
-    stats_chat_id — для БД и /stat (TARGET_CHAT_ID).
+    stats_chat_id — для БД и /stat.
     post_chat_id — куда слать сообщения колеса сейчас.
-  target — "channel" | "chat".
+    target — "channel" | "chat".
     """
     target = await get_wheel_post_target(conn)
-    stats_chat_id = int(settings.target_chat_id)
+    stats_chat_id = await get_effective_stats_chat_id(conn, settings)
     if target == "channel":
-        if settings.wheel_channel_id is None:
+        channel_id = await get_effective_wheel_channel_id(conn, settings)
+        if channel_id is None:
             raise ValueError(
-                "Включён постинг в канал, но WHEEL_CHANNEL_ID не задан в .env. "
-                "Добавьте id канала или переключите постинг в чат."
+                "Включён постинг в канал, но ID канала не задан. "
+                "Укажите его во вкладке «Админ» или переключите постинг в чат."
             )
-        post_chat_id = int(settings.wheel_channel_id)
+        post_chat_id = int(channel_id)
     else:
         post_chat_id = stats_chat_id
     return stats_chat_id, post_chat_id, target
 
 
-def wheel_post_settings_payload(
+async def wheel_post_settings_payload(
+    conn,
     settings: "Settings",
     target: str,
 ) -> dict[str, object]:
+    stats_chat_id = await get_effective_stats_chat_id(conn, settings)
+    channel_chat_id = await get_effective_wheel_channel_id(conn, settings)
     return {
         "target": target,
-        "stats_chat_id": int(settings.target_chat_id),
-        "channel_chat_id": settings.wheel_channel_id,
-        "channel_configured": settings.wheel_channel_id is not None,
+        "stats_chat_id": stats_chat_id,
+        "channel_chat_id": channel_chat_id,
+        "channel_configured": channel_chat_id is not None,
+        "ids_from_env": {
+            "stats_chat_id": int(settings.target_chat_id),
+            "channel_chat_id": settings.wheel_channel_id,
+        },
     }

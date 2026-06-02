@@ -688,7 +688,7 @@ function updateWheelPostStatusUi(data) {
     statusEl.textContent = `Сейчас постим в: ${dest}`;
     if (target === "channel" && !data.channel_configured) {
       statusEl.textContent +=
-        ". Задайте WHEEL_CHANNEL_ID в .env или снимите галку (постинг в чат).";
+        ". Укажите ID канала выше или снимите галку (постинг в чат).";
     }
   }
   if (hintEl) {
@@ -697,10 +697,34 @@ function updateWheelPostStatusUi(data) {
   }
 }
 
+function fillChatIdInputs(data) {
+  const statsIn = $("#cfg-stats-chat-id");
+  const channelIn = $("#cfg-wheel-channel-id");
+  const statusEl = $("#cfg-chat-ids-status");
+  if (statsIn && data.stats_chat_id != null) {
+    statsIn.value = String(data.stats_chat_id);
+  }
+  if (channelIn) {
+    channelIn.value =
+      data.channel_chat_id != null && data.channel_chat_id !== ""
+        ? String(data.channel_chat_id)
+        : "";
+  }
+  if (statusEl && data.ids_from_env) {
+    const env = data.ids_from_env;
+    const parts = [`из .env: чат ${env.stats_chat_id}`];
+    if (env.channel_chat_id != null) {
+      parts.push(`канал ${env.channel_chat_id}`);
+    }
+    statusEl.textContent = parts.join(", ");
+  }
+}
+
 async function loadWheelPostSettings() {
   const data = await api("/api/wheel/post-settings");
   const cb = $("#wheel-post-to-channel");
   if (cb) cb.checked = data.target !== "chat";
+  fillChatIdInputs(data);
   updateWheelPostStatusUi(data);
 }
 
@@ -740,6 +764,37 @@ function bindWheelPostSettings() {
   }
   bindAdminTestButton($("#admin-test-chat"), "/api/admin/test-chat", "чат");
   bindAdminTestButton($("#admin-test-channel"), "/api/admin/test-channel", "канал");
+
+  const saveBtn = $("#cfg-chat-ids-save");
+  if (saveBtn && saveBtn.dataset.bound !== "1") {
+    saveBtn.dataset.bound = "1";
+    saveBtn.addEventListener("click", async () => {
+      const statsRaw = ($("#cfg-stats-chat-id")?.value || "").trim();
+      const channelRaw = ($("#cfg-wheel-channel-id")?.value || "").trim();
+      if (!statsRaw) {
+        tgAlert("Укажите ID чата.");
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        const body = {
+          stats_chat_id: Number(statsRaw),
+          wheel_channel_id: channelRaw === "" ? null : Number(channelRaw),
+        };
+        const data = await api("/api/wheel/post-settings", {
+          method: "PUT",
+          body: JSON.stringify(body),
+        });
+        fillChatIdInputs(data);
+        updateWheelPostStatusUi(data);
+        tgAlert("ID сохранены.");
+      } catch (err) {
+        tgAlert(String(err && err.message ? err.message : err));
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  }
 }
 
 function renderHome(roleName) {

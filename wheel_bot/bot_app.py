@@ -120,7 +120,7 @@ def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
 def setup_router(settings: Settings, conn: aiosqlite.Connection) -> Router:
     router = Router(name="wheel")
 
-    target_id = int(settings.target_chat_id)
+    from wheel_bot.posting import get_effective_stats_chat_id
 
     @router.message(Command("start"))
     async def cmd_start(message: Message) -> None:
@@ -163,16 +163,23 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection) -> Router:
     async def _stats_prompt(message: Message) -> None:
         await message.answer("Выберите период для статистики:", reply_markup=_period_keyboard())
 
-    @router.message(F.chat.id == target_id, Command("stat"))
+    @router.message(Command("stat"))
     async def stats_cmd(message: Message) -> None:
+        target_id = await get_effective_stats_chat_id(conn, settings)
+        if message.chat.id != target_id:
+            return
         await _stats_prompt(message)
 
-    @router.message(F.chat.id == target_id, F.text.lower() == "статистика")
+    @router.message(F.text.lower() == "статистика")
     async def stats_text(message: Message) -> None:
+        target_id = await get_effective_stats_chat_id(conn, settings)
+        if message.chat.id != target_id:
+            return
         await _stats_prompt(message)
 
     @router.callback_query(F.data.startswith("stats:"))
     async def stats_answer(cb: CallbackQuery) -> None:
+        target_id = await get_effective_stats_chat_id(conn, settings)
         if not cb.message or cb.message.chat.id != target_id:
             await cb.answer()
             return
