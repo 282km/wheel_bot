@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260212h" />
+    <link rel="stylesheet" href="./style.css?v=20260213a" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -55,9 +55,10 @@
             <span id="draft-status" class="muted"></span>
           </div>
 
+          <div id="wheel-post-hint" class="muted" style="margin-bottom: 8px"></div>
           <div class="row">
             <button id="wheel-copy-list" type="button">Копировать список участников</button>
-            <button id="wheel-send-preview" type="button">Отправить предварительный список в чат</button>
+            <button id="wheel-send-preview" type="button">Отправить предварительный список</button>
           </div>
 
           <div class="grid2">
@@ -81,7 +82,7 @@
           </label>
 
           <div class="muted" style="margin-bottom: 8px">
-            В чат уйдёт анонс со списком участников, затем одно видео (MP4) со всеми раундами и итоговое сообщение.
+            Уйдёт анонс со списком участников, затем одно видео (MP4) со всеми раундами и итоговое сообщение (в канал или чат — см. вкладку «Админ»).
           </div>
           <button id="spin" type="button" class="primary">Крутить колесо</button>
           <pre id="spin-log" class="log"></pre>
@@ -187,11 +188,19 @@
         <section id="tab-admins" class="panel hidden">
           <h2>Админ</h2>
           <div class="card" style="margin-bottom:12px">
-            <div><strong>Проверка чата</strong></div>
-            <p class="muted" style="margin:8px 0">
-              Отправит тестовое сообщение в рабочий чат бота (TARGET_CHAT_ID).
+            <div><strong>Куда постить колесо</strong></div>
+            <label class="row" style="margin:10px 0 8px; cursor:pointer">
+              <input id="wheel-post-to-channel" type="checkbox" checked />
+              <span>Постить сообщения колеса в канал</span>
+            </label>
+            <p id="wheel-post-status" class="muted" style="margin:0 0 10px"></p>
+            <div class="row">
+              <button id="admin-test-channel" type="button">Тест в канал</button>
+              <button id="admin-test-chat" type="button">Тест в чат</button>
+            </div>
+            <p class="muted" style="margin:8px 0 0; font-size:13px">
+              Статистика (/stat) и история в WebApp всегда по чату (TARGET_CHAT_ID).
             </p>
-            <button id="admin-test-chat" type="button">Тестовое сообщение в чат</button>
           </div>
           <div id="admin-mgmt-block">
             <h3>Управление админами</h3>
@@ -217,6 +226,6 @@
       </p>
     </div>
 
-    <script src="./app.js?v=20260212l"></script>
+    <script src="./app.js?v=20260213a"></script>
   </body>
 </html>

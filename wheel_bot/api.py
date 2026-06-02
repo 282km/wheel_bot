@@ -18,6 +18,12 @@ from starlette.staticfiles import StaticFiles
 from wheel_bot import db
 from wheel_bot.config import Settings
 from wheel_bot.session_token import issue_token, make_session_payload, verify_token
+from wheel_bot.posting import (
+    get_wheel_post_target,
+    resolve_wheel_destinations,
+    set_wheel_post_target,
+    wheel_post_settings_payload,
+)
 from wheel_bot.spin_service import run_wheel_spin, run_wheel_spin_silent, send_silent_announce, send_silent_results
 from wheel_bot.tg_validate import validate_webapp_init_data
 
@@ -206,10 +212,12 @@ def create_app(
             announce_delay_sec = int(body.get("announce_delay_sec", 30))
 
             async with db_lock:
+                stats_chat_id, post_chat_id, post_target = await resolve_wheel_destinations(conn, settings)
                 result = await run_wheel_spin(
                     conn=conn,
                     bot=bot,
-                    chat_id=int(settings.target_chat_id),
+                    stats_chat_id=stats_chat_id,
+                    post_chat_id=post_chat_id,
                     admin_telegram_id=int(payload["tg_id"]),
                     depositor_id=depositor_id,
                     deposit_amount=deposit_amount,
@@ -217,6 +225,8 @@ def create_app(
                     prizes=prizes,
                     announce_delay_sec=announce_delay_sec,
                 )
+                result["post_target"] = post_target
+                result["post_chat_id"] = post_chat_id
             return JSONResponse(result)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
@@ -246,8 +256,9 @@ def create_app(
                 lines.append(f"{i}. {label}")
 
             text = "🎯 Предварительный список на колесо:\n\n" + "\n".join(lines)
-            await bot.send_message(int(settings.target_chat_id), text)
-            return JSONResponse({"ok": True})
+            _stats_id, post_chat_id, post_target = await resolve_wheel_destinations(conn, settings)
+            await bot.send_message(post_chat_id, text)
+            return JSONResponse({"ok": True, "post_chat_id": post_chat_id, "post_target": post_target})
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -264,10 +275,11 @@ def create_app(
             session_id_raw = body.get("session_id")
             session_id = int(session_id_raw) if session_id_raw is not None else None
             async with db_lock:
+                stats_chat_id, post_chat_id, post_target = await resolve_wheel_destinations(conn, settings)
                 result = await run_wheel_spin_silent(
                     conn=conn,
                     bot=bot,
-                    chat_id=int(settings.target_chat_id),
+                    stats_chat_id=stats_chat_id,
                     admin_telegram_id=int(payload["tg_id"]),
                     depositor_id=depositor_id,
                     deposit_amount=deposit_amount,
@@ -275,6 +287,8 @@ def create_app(
                     prizes=prizes,
                     session_id=session_id,
                 )
+                result["post_target"] = post_target
+                result["post_chat_id"] = post_chat_id
             return JSONResponse(result)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
@@ -289,9 +303,16 @@ def create_app(
             body = _json_body(await request.body()) or {}
             session_id = int(body.get("session_id"))
             async with db_lock:
+                stats_chat_id, post_chat_id, post_target = await resolve_wheel_destinations(conn, settings)
                 result = await send_silent_results(
-                    conn=conn, bot=bot, chat_id=int(settings.target_chat_id), session_id=session_id
+                    conn=conn,
+                    bot=bot,
+                    stats_chat_id=stats_chat_id,
+                    post_chat_id=post_chat_id,
+                    session_id=session_id,
                 )
+                result["post_target"] = post_target
+                result["post_chat_id"] = post_chat_id
             return JSONResponse(result)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
@@ -309,16 +330,20 @@ def create_app(
             prizes = [float(x) for x in (body.get("prizes") or [])]
             selected_ids = [int(x) for x in (body.get("selected_ids") or [])]
             async with db_lock:
+                stats_chat_id, post_chat_id, post_target = await resolve_wheel_destinations(conn, settings)
                 result = await send_silent_announce(
                     conn=conn,
                     bot=bot,
-                    chat_id=int(settings.target_chat_id),
+                    stats_chat_id=stats_chat_id,
+                    post_chat_id=post_chat_id,
                     admin_telegram_id=int(payload["tg_id"]),
                     depositor_id=depositor_id,
                     deposit_amount=deposit_amount,
                     selected_ids=selected_ids,
                     prizes=prizes,
                 )
+                result["post_target"] = post_target
+                result["post_chat_id"] = post_chat_id
             return JSONResponse(result)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
@@ -402,6 +427,28 @@ def create_app(
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
+    async def wheel_post_settings_get(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            target = await get_wheel_post_target(conn)
+            return JSONResponse(wheel_post_settings_payload(settings, target))
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    async def wheel_post_settings_put(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            body = _json_body(await request.body()) or {}
+            target = str(body.get("target") or "").strip().lower()
+            await set_wheel_post_target(conn, target)
+            return JSONResponse(wheel_post_settings_payload(settings, await get_wheel_post_target(conn)))
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
     async def admin_test_chat(request: Request) -> Response:
         try:
             payload = await _auth(request, settings)
@@ -410,13 +457,33 @@ def create_app(
             admin_id = int(payload["tg_id"])
             chat_id = int(settings.target_chat_id)
             text = (
-                "✅ Тестовое сообщение от WebApp «Колесо».\n"
+                "✅ Тестовое сообщение от WebApp «Колесо» (чат).\n"
                 f"Админ: {admin_id}\n"
                 f"Чат: {chat_id}\n"
-                "Если вы видите это — бот может отправлять сообщения в рабочий чат."
+                "Статистика и история колёс привязаны к этому чату."
             )
             await bot.send_message(chat_id, text)
-            return JSONResponse({"ok": True, "chat_id": chat_id})
+            return JSONResponse({"ok": True, "chat_id": chat_id, "kind": "chat"})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    async def admin_test_channel(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            if settings.wheel_channel_id is None:
+                return JSONResponse({"error": "WHEEL_CHANNEL_ID не задан в .env"}, status_code=400)
+            admin_id = int(payload["tg_id"])
+            channel_id = int(settings.wheel_channel_id)
+            text = (
+                "✅ Тестовое сообщение от WebApp «Колесо» (канал).\n"
+                f"Админ: {admin_id}\n"
+                f"Канал: {channel_id}\n"
+                "Сюда уходят анонсы и результаты колеса (если включён постинг в канал)."
+            )
+            await bot.send_message(channel_id, text)
+            return JSONResponse({"ok": True, "chat_id": channel_id, "kind": "channel"})
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -451,6 +518,8 @@ def create_app(
         Route("/api/wheel/silent-announce", wheel_silent_announce, methods=["POST"]),
         Route("/api/wheel/silent-send-results", wheel_silent_send_results, methods=["POST"]),
         Route("/api/wheel/history", wheel_history, methods=["GET"]),
+        Route("/api/wheel/post-settings", wheel_post_settings_get, methods=["GET"]),
+        Route("/api/wheel/post-settings", wheel_post_settings_put, methods=["PUT"]),
         Route("/api/message-templates", message_templates_get, methods=["GET"]),
         Route("/api/message-templates", message_templates_put, methods=["PUT"]),
         Route("/api/message-templates/reset", message_templates_reset, methods=["POST"]),
@@ -458,6 +527,7 @@ def create_app(
         Route("/api/admins", admins_create, methods=["POST"]),
         Route("/api/admins/{id}", admins_delete, methods=["DELETE"]),
         Route("/api/admin/test-chat", admin_test_chat, methods=["POST"]),
+        Route("/api/admin/test-channel", admin_test_channel, methods=["POST"]),
         Route(settings.webhook_path, telegram_webhook, methods=["POST"]),
         Mount("/webapp", StaticFiles(directory=str(settings.static_dir / "webapp"), html=True)),
     ]

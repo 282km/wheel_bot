@@ -30,6 +30,7 @@ class Settings:
     session_secret: str
     public_base_url: str
     target_chat_id: int
+    wheel_channel_id: Optional[int]
     superadmin_ids: set[int]
     http_host: str
     http_port: int
@@ -67,6 +68,14 @@ def load_settings() -> Settings:
     except ValueError as e:
         raise RuntimeError(f"TARGET_CHAT_ID must be an integer, got: {chat_raw!r}") from e
 
+    channel_raw = os.getenv("WHEEL_CHANNEL_ID", "").strip()
+    wheel_channel_id: Optional[int] = None
+    if channel_raw:
+        try:
+            wheel_channel_id = int(channel_raw)
+        except ValueError as e:
+            raise RuntimeError(f"WHEEL_CHANNEL_ID must be an integer, got: {channel_raw!r}") from e
+
     session_secret = os.getenv("SESSION_SECRET", "").strip()
     if len(session_secret) < 16:
         raise RuntimeError("SESSION_SECRET must be at least 16 characters")
@@ -97,6 +106,7 @@ def load_settings() -> Settings:
         session_secret=session_secret,
         public_base_url=public_base,
         target_chat_id=target_chat_id,
+        wheel_channel_id=wheel_channel_id,
         superadmin_ids=_parse_ids(os.getenv("SUPERADMIN_IDS")),
         http_host=os.getenv("HTTP_HOST", "0.0.0.0"),
         http_port=int(os.getenv("HTTP_PORT", "8080")),

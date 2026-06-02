@@ -17,6 +17,7 @@ let silentCurrentSegments = [];
 let silentWheelRotationDeg = 0;
 let silentColorById = new Map();
 let silentCenterOverlayTimer = null;
+let wheelPostTarget = "channel";
 
 function getTg() {
   return window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
@@ -674,20 +675,71 @@ function setTab(name) {
   }
 }
 
-function bindAdminTestChatButton(btn) {
+function updateWheelPostStatusUi(data) {
+  const target = data?.target === "chat" ? "chat" : "channel";
+  wheelPostTarget = target;
+  const statusEl = $("#wheel-post-status");
+  const hintEl = $("#wheel-post-hint");
+  if (statusEl) {
+    const dest =
+      target === "channel"
+        ? `канал (${data.channel_chat_id ?? "не задан"})`
+        : `чат (${data.stats_chat_id})`;
+    statusEl.textContent = `Сейчас постим в: ${dest}`;
+    if (target === "channel" && !data.channel_configured) {
+      statusEl.textContent +=
+        ". Задайте WHEEL_CHANNEL_ID в .env или снимите галку (постинг в чат).";
+    }
+  }
+  if (hintEl) {
+    hintEl.textContent =
+      target === "channel" ? "Сообщения колеса уйдут в канал." : "Сообщения колеса уйдут в чат.";
+  }
+}
+
+async function loadWheelPostSettings() {
+  const data = await api("/api/wheel/post-settings");
+  const cb = $("#wheel-post-to-channel");
+  if (cb) cb.checked = data.target !== "chat";
+  updateWheelPostStatusUi(data);
+}
+
+function bindAdminTestButton(btn, path, label) {
   if (!btn || btn.dataset.bound === "1") return;
   btn.dataset.bound = "1";
   btn.addEventListener("click", async () => {
     btn.disabled = true;
     try {
-      const res = await api("/api/admin/test-chat", { method: "POST" });
-      tgAlert(`Тестовое сообщение отправлено в чат ${res.chat_id}.`);
+      const res = await api(path, { method: "POST" });
+      tgAlert(`Тест отправлен в ${label} (${res.chat_id}).`);
     } catch (err) {
       tgAlert(String(err && err.message ? err.message : err));
     } finally {
       btn.disabled = false;
     }
   });
+}
+
+function bindWheelPostSettings() {
+  const cb = $("#wheel-post-to-channel");
+  if (cb && cb.dataset.bound !== "1") {
+    cb.dataset.bound = "1";
+    cb.addEventListener("change", async () => {
+      const target = cb.checked ? "channel" : "chat";
+      try {
+        const data = await api("/api/wheel/post-settings", {
+          method: "PUT",
+          body: JSON.stringify({ target }),
+        });
+        updateWheelPostStatusUi(data);
+      } catch (err) {
+        cb.checked = !cb.checked;
+        tgAlert(String(err && err.message ? err.message : err));
+      }
+    });
+  }
+  bindAdminTestButton($("#admin-test-chat"), "/api/admin/test-chat", "чат");
+  bindAdminTestButton($("#admin-test-channel"), "/api/admin/test-channel", "канал");
 }
 
 function renderHome(roleName) {
@@ -698,16 +750,9 @@ function renderHome(roleName) {
       <div><strong>Добро пожаловать в управление колесом 🎡</strong></div>
       <div class="muted" style="margin-top:8px">
         Используйте вкладки для управления участниками, запуском колеса, историей и шаблонами сообщений.
-      </div>
-      <div class="card" style="margin-top:12px">
-        <div><strong>Проверка чата</strong></div>
-        <p class="muted" style="margin:8px 0">
-          Быстрый тест: отправить сообщение в рабочий чат бота.
-        </p>
-        <button id="admin-test-chat-home" type="button">Тестовое сообщение в чат</button>
+        Настройка канала и тесты — во вкладке «Админ».
       </div>
     `;
-    bindAdminTestChatButton($("#admin-test-chat-home"));
     return;
   }
   root.innerHTML = `
@@ -1199,7 +1244,12 @@ async function boot() {
     });
   }
 
-  bindAdminTestChatButton($("#admin-test-chat"));
+  bindWheelPostSettings();
+  try {
+    await loadWheelPostSettings();
+  } catch (err) {
+    tgAlert(String(err && err.message ? err.message : err));
+  }
 
   const adminForm = $("#admin-form");
   if (adminForm) {

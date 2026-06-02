@@ -100,7 +100,8 @@ async def run_wheel_spin(
     *,
     conn: Any,
     bot: Bot,
-    chat_id: int,
+    stats_chat_id: int,
+    post_chat_id: int,
     admin_telegram_id: int,
     depositor_id: int,
     deposit_amount: float,
@@ -116,7 +117,7 @@ async def run_wheel_spin(
 
     sid = await db.create_wheel_session(
         conn,
-        chat_id=chat_id,
+        chat_id=stats_chat_id,
         depositor_id=depositor_id,
         deposit_amount=float(deposit_amount),
         created_by=admin_telegram_id,
@@ -135,7 +136,7 @@ async def run_wheel_spin(
         roster_rows=roster_rows,
         silent_footer=False,
     )
-    await bot.send_message(chat_id, announce_text)
+    await bot.send_message(post_chat_id, announce_text)
     if delay_sec:
         await asyncio.sleep(delay_sec)
 
@@ -177,7 +178,7 @@ async def run_wheel_spin(
     if len(caption) > 1020:
         caption = caption[:1017] + "…"
     await bot.send_animation(
-        chat_id,
+        post_chat_id,
         BufferedInputFile(media_bytes, filename=f"wheel_{sid}.{media_ext}"),
         caption=caption or f"🎡 Колесо #{sid}",
     )
@@ -197,7 +198,7 @@ async def run_wheel_spin(
         deposit_amount=f"{float(deposit_amount):g}",
         winner_lines="\n".join(summary_lines) if summary_lines else "— нет победителей",
     )
-    await bot.send_message(chat_id, finish_text)
+    await bot.send_message(post_chat_id, finish_text)
 
     return {"session_id": sid, "results": results}
 
@@ -206,7 +207,7 @@ async def run_wheel_spin_silent(
     *,
     conn: Any,
     bot: Bot,
-    chat_id: int,
+    stats_chat_id: int,
     admin_telegram_id: int,
     depositor_id: int,
     deposit_amount: float,
@@ -221,7 +222,7 @@ async def run_wheel_spin_silent(
     if session_id is None:
         sid = await db.create_wheel_session(
             conn,
-            chat_id=chat_id,
+            chat_id=stats_chat_id,
             depositor_id=depositor_id,
             deposit_amount=float(deposit_amount),
             created_by=admin_telegram_id,
@@ -231,7 +232,7 @@ async def run_wheel_spin_silent(
         )
     else:
         session = await db.get_wheel_session(conn, int(session_id))
-        if not session or int(session["chat_id"]) != int(chat_id):
+        if not session or int(session["chat_id"]) != int(stats_chat_id):
             raise ValueError("Колесо не найдено")
         if str(session["mode"]) != "silent":
             raise ValueError("Это колесо не в режиме тишины")
@@ -270,7 +271,8 @@ async def send_silent_announce(
     *,
     conn: Any,
     bot: Bot,
-    chat_id: int,
+    stats_chat_id: int,
+    post_chat_id: int,
     admin_telegram_id: int,
     depositor_id: int,
     deposit_amount: float,
@@ -283,7 +285,7 @@ async def send_silent_announce(
     db_roster = [(pid, idx, roster_rows[idx][3]) for idx, pid in enumerate(roster_ids)]
     sid = await db.create_wheel_session(
         conn,
-        chat_id=chat_id,
+        chat_id=stats_chat_id,
         depositor_id=depositor_id,
         deposit_amount=float(deposit_amount),
         created_by=admin_telegram_id,
@@ -303,7 +305,7 @@ async def send_silent_announce(
         roster_rows=roster_rows,
         silent_footer=True,
     )
-    await bot.send_message(chat_id, text)
+    await bot.send_message(post_chat_id, text)
     return {"ok": True, "session_id": sid}
 
 
@@ -311,11 +313,12 @@ async def send_silent_results(
     *,
     conn: Any,
     bot: Bot,
-    chat_id: int,
+    stats_chat_id: int,
+    post_chat_id: int,
     session_id: int,
 ) -> dict[str, Any]:
     session = await db.get_wheel_session(conn, session_id)
-    if not session or int(session["chat_id"]) != int(chat_id):
+    if not session or int(session["chat_id"]) != int(stats_chat_id):
         raise ValueError("Колесо не найдено")
     if str(session["mode"]) != "silent":
         raise ValueError("Это колесо не в режиме тишины")
@@ -343,6 +346,6 @@ async def send_silent_results(
         deposit_amount=f"{float(session['deposit_amount']):g}",
         winner_lines="\n".join(winner_lines) if winner_lines else "— нет победителей",
     )
-    await bot.send_message(chat_id, finish_text)
+    await bot.send_message(post_chat_id, finish_text)
     await db.mark_wheel_session_results_sent(conn, session_id)
     return {"ok": True, "session_id": int(session["id"])}
