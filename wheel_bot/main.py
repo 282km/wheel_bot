@@ -6,6 +6,7 @@ from typing import Any
 
 import uvicorn
 from aiogram import Bot, Dispatcher
+from aiogram.types import MenuButtonWebApp, WebAppInfo
 
 from wheel_bot.api import create_app
 from wheel_bot.bot_app import setup_router
@@ -58,6 +59,16 @@ async def run() -> None:
         secret_token=settings.webhook_secret,
         allowed_updates=dp.resolve_used_update_types(),
     )
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Колесо",
+                web_app=WebAppInfo(url=settings.webapp_url),
+            )
+        )
+        log.info("WebApp menu button set: %s", settings.webapp_url)
+    except Exception:
+        log.exception("Failed to set WebApp menu button (check BotFather domain)")
 
     cfg = uvicorn.Config(**uv_kwargs)
     server = uvicorn.Server(cfg)

@@ -783,20 +783,43 @@ async function animateSilentRound(round) {
   await sleep(5000);
 }
 
+function showBootError(detail) {
+  const appEl = document.getElementById("app");
+  const errEl = document.getElementById("boot-error");
+  if (appEl) appEl.classList.add("hidden");
+  if (errEl) {
+    errEl.classList.remove("hidden");
+    const slot = errEl.querySelector("[data-boot-detail]");
+    if (slot && detail) slot.textContent = String(detail);
+  }
+}
+
 async function boot() {
   const tg = window.Telegram && window.Telegram.WebApp;
   if (!tg || !tg.initData) {
-    document.getElementById("app").classList.add("hidden");
-    document.getElementById("boot-error").classList.remove("hidden");
+    showBootError(
+      "Откройте через кнопку «🎡 Управление колесом» в личке у бота или меню «Колесо». Ссылку в браузере открывать нельзя."
+    );
     return;
   }
   tg.ready();
   tg.expand();
 
-  const sess = await api("/api/session", {
+  let sess;
+  try {
+    sess = await api("/api/session", {
     method: "POST",
-    body: JSON.stringify({ initData: tg.initData }),
-  });
+      body: JSON.stringify({ initData: tg.initData }),
+    });
+  } catch (err) {
+    const msg = String(err && err.message ? err.message : err);
+    if (msg.includes("bad hash")) {
+      showBootError("Ошибка авторизации (bad hash). Проверьте BOT_TOKEN в .env — он должен совпадать с токеном бота в BotFather.");
+    } else {
+      showBootError(`Ошибка API /api/session: ${msg}`);
+    }
+    throw err;
+  }
   token = sess.token;
   role = sess.role;
 
@@ -1146,5 +1169,8 @@ async function boot() {
 
 boot().catch((e) => {
   console.error(e);
-  tgAlert(String(e && e.message ? e.message : e));
+  const msg = String(e && e.message ? e.message : e);
+  if (!document.getElementById("boot-error")?.classList.contains("hidden")) return;
+  showBootError(`Ошибка запуска: ${msg}`);
+  tgAlert(msg);
 });

@@ -11,6 +11,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    WebAppInfo,
 )
 
 from wheel_bot import db
@@ -103,6 +104,19 @@ def _format_stats_block(data: dict[str, Any]) -> str:
     return text[:3899] + "…"
 
 
+def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎡 Управление колесом",
+                    web_app=WebAppInfo(url=settings.webapp_url),
+                )
+            ]
+        ]
+    )
+
+
 def setup_router(settings: Settings, conn: aiosqlite.Connection) -> Router:
     router = Router(name="wheel")
 
@@ -117,7 +131,9 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection) -> Router:
         if role in ("admin", "superadmin"):
             await message.answer(
                 "Вы администратор колеса.\n"
-                "Команда статистики работает в общем чате.",
+                "Откройте приложение кнопкой ниже (не по ссылке в браузере).\n"
+                "Статистика — в общем чате: /stat или «Статистика».",
+                reply_markup=_admin_webapp_keyboard(settings),
             )
             return
         await message.answer("В общем чате доступна команда статистики «/stat» или текст «Статистика».")
@@ -130,7 +146,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection) -> Router:
         role = await db.ensure_user(conn, tg_id)
         if role in ("admin", "superadmin"):
             await message.answer(
-                f"Откройте WebApp «Управление колесом» по ссылке:\n{settings.webapp_url}",
+                "Нажмите кнопку, чтобы открыть WebApp внутри Telegram:",
+                reply_markup=_admin_webapp_keyboard(settings),
             )
             return
         await message.answer("У вас нет прав администратора для управления колесом.")
