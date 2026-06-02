@@ -193,6 +193,22 @@ button.primary {
   border-radius: 6px;
 }
 
+.card-wheel-dragging {
+  opacity: 0.45;
+}
+
+.card-wheel-drag-before {
+  box-shadow: inset 0 3px 0 #5eead4;
+}
+
+.card-wheel-drag-after {
+  box-shadow: inset 0 -3px 0 #5eead4;
+}
+
+.drop.card-wheel-drag-empty {
+  box-shadow: inset 0 0 0 2px rgba(94, 234, 212, 0.45);
+}
+
 .btn-wheel-add {
   border-color: #2d6a4f;
   background: #1a3328;

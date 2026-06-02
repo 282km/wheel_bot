@@ -10,6 +10,7 @@ let selectedIds = [];
 let editingParticipantId = null;
 let historyItemsCache = [];
 let wiredDndZones = new WeakSet();
+let dragParticipantId = null;
 let silentSpinRunning = false;
 let silentAnnounceSessionId = null;
 let silentSpunSessionId = null;
@@ -662,33 +663,111 @@ function renderCard(p, side, wheelNumber = null) {
     });
   }
   div.addEventListener("dragstart", (ev) => {
+    dragParticipantId = p.id;
     ev.dataTransfer.setData("text/plain", String(p.id));
     ev.dataTransfer.effectAllowed = "move";
+    div.classList.add("card-wheel-dragging");
   });
+  div.addEventListener("dragend", () => {
+    dragParticipantId = null;
+    div.classList.remove("card-wheel-dragging");
+    clearPickedDragMarkers();
+  });
+  if (btn) btn.draggable = false;
   return div;
+}
+
+function clearPickedDragMarkers() {
+  for (const el of document.querySelectorAll(
+    ".card-wheel-drag-before, .card-wheel-drag-after, .card-wheel-drag-empty"
+  )) {
+    el.classList.remove("card-wheel-drag-before", "card-wheel-drag-after", "card-wheel-drag-empty");
+  }
+}
+
+function getDropIndexInPicked(pickedEl, clientY, skipId = null) {
+  const cards = [...pickedEl.querySelectorAll(".card-wheel[data-pid]")].filter((el) => {
+    const pid = Number(el.dataset.pid);
+    return !skipId || pid !== skipId;
+  });
+  if (!cards.length) return 0;
+  for (let i = 0; i < cards.length; i += 1) {
+    const rect = cards[i].getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) return i;
+  }
+  return cards.length;
+}
+
+function markPickedInsertIndex(pickedEl, insertIndex, skipId = null) {
+  clearPickedDragMarkers();
+  const cards = [...pickedEl.querySelectorAll(".card-wheel[data-pid]")].filter((el) => {
+    const pid = Number(el.dataset.pid);
+    return !skipId || pid !== skipId;
+  });
+  if (!cards.length) {
+    pickedEl.classList.add("card-wheel-drag-empty");
+    return;
+  }
+  if (insertIndex < cards.length) {
+    cards[insertIndex].classList.add("card-wheel-drag-before");
+  } else {
+    cards[cards.length - 1].classList.add("card-wheel-drag-after");
+  }
+}
+
+function reorderSelectedIds(id, insertIndex) {
+  const next = selectedIds.filter((x) => x !== id);
+  let idx = Math.max(0, Math.min(insertIndex, next.length));
+  const fromIdx = selectedIds.indexOf(id);
+  if (fromIdx >= 0 && fromIdx < idx) idx -= 1;
+  next.splice(idx, 0, id);
+  selectedIds = next;
 }
 
 function wireDnD(pool, picked) {
   if (wiredDndZones.has(pool) || wiredDndZones.has(picked)) return;
   wiredDndZones.add(pool);
   wiredDndZones.add(picked);
-  const zones = [pool, picked];
-  for (const z of zones) {
-    z.addEventListener("dragover", (e) => {
-      e.preventDefault();
-    });
-    z.addEventListener("drop", (e) => {
-      e.preventDefault();
-      const id = Number(e.dataTransfer.getData("text/plain"));
-      if (!id) return;
-      const isPicked = z === picked;
-      const set = new Set(selectedIds);
-      if (isPicked) set.add(id);
-      else set.delete(id);
-      selectedIds = Array.from(set);
-      renderPoolAndPicked();
-    });
-  }
+
+  pool.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    clearPickedDragMarkers();
+  });
+
+  pool.addEventListener("drop", (e) => {
+    e.preventDefault();
+    clearPickedDragMarkers();
+    const id = Number(e.dataTransfer.getData("text/plain"));
+    if (!id) return;
+    selectedIds = selectedIds.filter((x) => x !== id);
+    renderPoolAndPicked();
+  });
+
+  picked.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const skipId = dragParticipantId;
+    const insertAt = getDropIndexInPicked(picked, e.clientY, skipId);
+    markPickedInsertIndex(picked, insertAt, skipId);
+  });
+
+  picked.addEventListener("dragleave", (e) => {
+    if (!picked.contains(e.relatedTarget)) {
+      clearPickedDragMarkers();
+    }
+  });
+
+  picked.addEventListener("drop", (e) => {
+    e.preventDefault();
+    clearPickedDragMarkers();
+    const id = Number(e.dataTransfer.getData("text/plain"));
+    if (!id) return;
+    const skipId = dragParticipantId === id ? id : null;
+    const insertAt = getDropIndexInPicked(picked, e.clientY, skipId);
+    reorderSelectedIds(id, insertAt);
+    renderPoolAndPicked();
+  });
 }
 
 function refreshDepositorSelect(selQuery = "#depositor") {
