@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import io
+import logging
 import math
+import shutil
+import subprocess
+import tempfile
 from colorsys import hls_to_rgb
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-_WHEEL_BG = (26, 30, 42, 255)
-_RING = (47, 54, 71, 255)
+log = logging.getLogger(__name__)
+
+_WHEEL_BG_RGB = (26, 30, 42)
+_RING_RGB = (47, 54, 71)
 
 
 def _ease_out_cubic(t: float) -> float:
@@ -50,13 +56,26 @@ def _text_bbox(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) 
     return float(bb[2] - bb[0]), float(bb[3] - bb[1])
 
 
+def _pillow_xy(cx: float, cy: float, radius: float, deg_cw: float) -> tuple[float, float]:
+    """Pillow angles: 0° = 3 o'clock, clockwise."""
+    rad = math.radians(deg_cw)
+    return cx + radius * math.cos(rad), cy + radius * math.sin(rad)
+
+
+def _sector_polygon(cx: float, cy: float, radius: float, start_deg: float, end_deg: float, steps: int = 40) -> list[tuple[float, float]]:
+    pts: list[tuple[float, float]] = [(cx, cy)]
+    span = end_deg - start_deg
+    for i in range(steps + 1):
+        deg = start_deg + span * (i / steps)
+        pts.append(_pillow_xy(cx, cy, radius, deg))
+    return pts
+
+
 def _fit_label_font(
     draw: ImageDraw.ImageDraw, nick: str, max_w: float, max_font: int, min_font: int
 ) -> tuple[str, ImageFont.ImageFont, float, float]:
-    label = _cut(nick, 18)
+    label = _cut(nick, 24)
     font_size = max_font
-    tw, th = 0.0, 0.0
-    font = _load_font(font_size)
     while font_size >= min_font:
         font = _load_font(font_size)
         tw, th = _text_bbox(draw, label, font)
@@ -79,14 +98,11 @@ def _paste_radial_label(
     lx: float,
     ly: float,
     mid_rad: float,
-    bbox: tuple[int, int, int, int],
-    start: float,
-    end: float,
     size: int,
-) -> Image.Image:
+) -> None:
     tw, th = _text_bbox(ImageDraw.Draw(img), label, font)
-    pad = max(4, size // 64)
-    box = int(max(tw, th) + pad * 2)
+    pad = max(6, size // 48)
+    box = int(max(tw + pad * 2, th + pad * 2, 24))
     txt = Image.new("RGBA", (box, box), (0, 0, 0, 0))
     tdraw = ImageDraw.Draw(txt)
     tdraw.text(
@@ -94,8 +110,8 @@ def _paste_radial_label(
         label,
         fill=(255, 255, 255, 255),
         font=font,
-        stroke_width=max(1, size // 160),
-        stroke_fill=(0, 0, 0, 220),
+        stroke_width=max(1, size // 140),
+        stroke_fill=(0, 0, 0, 230),
     )
 
     rot_deg = math.degrees(mid_rad)
@@ -103,55 +119,48 @@ def _paste_radial_label(
         rot_deg += 180
     txt = txt.rotate(-rot_deg, expand=True, resample=Image.Resampling.BICUBIC)
 
-    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    layer.paste(txt, (int(lx - txt.width / 2), int(ly - txt.height / 2)), txt)
-
-    sector_mask = Image.new("L", img.size, 0)
-    smask = ImageDraw.Draw(sector_mask)
-    smask.pieslice(bbox, start, end, fill=255)
-    return Image.composite(layer, img, sector_mask)
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    overlay.paste(txt, (int(lx - txt.width / 2), int(ly - txt.height / 2)), txt)
+    base = img.convert("RGBA")
+    img.paste(Image.alpha_composite(base, overlay).convert("RGB"))
 
 
 def _wheel_layer(size: int, roster: list[tuple[str, str, int]]) -> Image.Image:
-    """
-    roster entries: (nick, description, hue_degrees)
-    Sectors start at 12 o'clock, clockwise.
-    """
+    """roster entries: (nick, description, hue_degrees). Sectors from 12 o'clock."""
     n = len(roster)
     if n < 2:
         raise ValueError("need at least 2 sectors")
 
-    img = Image.new("RGBA", (size, size), _WHEEL_BG)
+    img = Image.new("RGB", (size, size), _WHEEL_BG_RGB)
     draw = ImageDraw.Draw(img)
-    cx = cy = size // 2
+    cx = cy = size / 2
     pad = max(8, size // 32)
-    outer_r = size // 2 - pad
-    bbox = (pad, pad, size - pad, size - pad)
+    outer_r = size / 2 - pad
     step_deg = 360.0 / n
-    label_r = outer_r * 0.6
-    max_font = max(10, min(17, int(size / (7 + n * 0.45))))
-    min_font = max(8, max_font - 6)
+    label_r = outer_r * 0.62
+    max_font = max(11, min(18, int(size / (6 + n * 0.4))))
+    min_font = max(9, max_font - 5)
 
     for i in range(n):
-        nick, _desc, hue = roster[i]
+        _nick, _desc, hue = roster[i]
         start = -90.0 + i * step_deg
         end = start + step_deg
-        r, g, b = _hue_to_rgb(hue)
-        draw.pieslice(bbox, start, end, fill=(r, g, b, 255), outline=(20, 20, 20, 255))
+        poly = _sector_polygon(cx, cy, outer_r, start, end)
+        draw.polygon(poly, fill=_hue_to_rgb(hue), outline=(18, 18, 18))
 
-    draw.ellipse(bbox, outline=_RING, width=max(2, size // 128))
+    ring_bbox = (pad, pad, size - pad, size - pad)
+    draw.ellipse(ring_bbox, outline=_RING_RGB, width=max(2, size // 128))
 
     measure = ImageDraw.Draw(img)
     for i in range(n):
         nick, _desc, _hue = roster[i]
-        start = -90.0 + i * step_deg
-        end = start + step_deg
-        mid_rad = math.radians(-90.0 + (i + 0.5) * step_deg)
-        lx = cx + label_r * math.cos(mid_rad)
-        ly = cy + label_r * math.sin(mid_rad)
-        max_w = 2 * label_r * math.sin(math.radians(step_deg / 2)) * 0.96
+        mid_deg = -90.0 + (i + 0.5) * step_deg
+        mid_rad = math.radians(mid_deg)
+        lx, ly = _pillow_xy(cx, cy, label_r, mid_deg)
+        chord = 2 * label_r * math.sin(math.radians(step_deg / 2))
+        max_w = max(chord * 1.15, outer_r * 0.22)
         label, font, _tw, _th = _fit_label_font(measure, nick, max_w, max_font, min_font)
-        img = _paste_radial_label(img, label, font, lx, ly, mid_rad, bbox, start, end, size)
+        _paste_radial_label(img, label, font, lx, ly, mid_rad, size)
 
     return img
 
@@ -192,13 +201,8 @@ def _final_rotation_degrees(n: int, winner_slot: int, extra_turns: int = 5) -> f
 
 
 def _compose_frame(base: Image.Image, pointer: Image.Image, angle_deg: float, badge: Image.Image | None = None) -> Image.Image:
-    rotated = base.rotate(
-        angle_deg,
-        resample=Image.Resampling.BICUBIC,
-        expand=False,
-        fillcolor=_WHEEL_BG[:3],
-    )
-    composed = Image.alpha_composite(rotated, pointer)
+    rotated = base.rotate(angle_deg, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=_WHEEL_BG_RGB)
+    composed = Image.alpha_composite(rotated.convert("RGBA"), pointer)
     if badge is not None:
         composed = Image.alpha_composite(composed, badge)
     return composed.convert("RGB")
@@ -208,7 +212,7 @@ def _round_spin_frames(
     roster: list[tuple[str, str, int]],
     winner_slot: int,
     *,
-    size: int = 384,
+    size: int = 420,
     fps: int = 8,
     spin_sec: float = 2.0,
 ) -> list[Image.Image]:
@@ -231,48 +235,15 @@ def _round_spin_frames(
     return frames
 
 
-def _save_gif(frames: list[Image.Image], fps: int) -> bytes:
-    if not frames:
-        raise ValueError("no frames")
-    duration_ms = int(round(1000 / max(1, fps)))
-    buf = io.BytesIO()
-    frames[0].save(
-        buf,
-        format="GIF",
-        save_all=True,
-        append_images=frames[1:],
-        duration=duration_ms,
-        loop=0,
-        optimize=True,
-        disposal=2,
-    )
-    return buf.getvalue()
-
-
-def render_spin_gif(
-    roster: list[tuple[str, str, int]],
-    winner_slot: int,
-    duration_sec: float = 3.0,
-    fps: int = 10,
-) -> bytes:
-    """Single-round GIF (kept for compatibility)."""
-    frames = _round_spin_frames(roster, winner_slot, size=384, fps=fps, spin_sec=duration_sec)
-    return _save_gif(frames, fps)
-
-
-def render_multi_round_spin_gif(
+def _collect_multi_round_frames(
     rounds: list[tuple[list[tuple[str, str, int]], int]],
     *,
-    size: int = 384,
+    size: int = 420,
     fps: int = 8,
     spin_sec: float = 2.0,
     hold_sec: float = 1.0,
     gap_sec: float = 0.2,
-) -> bytes:
-    """
-    One GIF: spin + pause for each round in order.
-    rounds: list of (roster, winner_slot_index).
-    """
+) -> list[Image.Image]:
     if not rounds:
         raise ValueError("no rounds")
 
@@ -292,9 +263,118 @@ def render_multi_round_spin_gif(
 
         for _ in range(hold_count):
             all_frames.append(still.copy())
-
         if rnd_idx < len(rounds):
             for _ in range(gap_count):
                 all_frames.append(still.copy())
 
-    return _save_gif(all_frames, fps)
+    return all_frames
+
+
+def _save_gif(frames: list[Image.Image], fps: int) -> bytes:
+    if not frames:
+        raise ValueError("no frames")
+    duration_ms = int(round(1000 / max(1, fps)))
+    buf = io.BytesIO()
+    frames[0].save(
+        buf,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=True,
+        disposal=2,
+    )
+    return buf.getvalue()
+
+
+def _save_mp4(frames: list[Image.Image], fps: int) -> bytes:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise OSError("ffmpeg not found")
+
+    with tempfile.TemporaryDirectory(prefix="wheel_mp4_") as tmp:
+        td = Path(tmp)
+        for i, frame in enumerate(frames):
+            frame.save(td / f"frame_{i:05d}.png", format="PNG")
+
+        out_path = td / "wheel.mp4"
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            str(max(1, fps)),
+            "-i",
+            str(td / "frame_%05d.png"),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "28",
+            "-movflags",
+            "+faststart",
+            "-an",
+            str(out_path),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "ffmpeg failed").strip()
+            raise RuntimeError(err)
+        return out_path.read_bytes()
+
+
+def render_multi_round_spin_media(
+    rounds: list[tuple[list[tuple[str, str, int]], int]],
+    *,
+    size: int = 420,
+    fps: int = 8,
+    spin_sec: float = 2.0,
+    hold_sec: float = 1.0,
+    gap_sec: float = 0.2,
+) -> tuple[bytes, str]:
+    """Returns (file_bytes, extension without dot: mp4 or gif)."""
+    frames = _collect_multi_round_frames(
+        rounds,
+        size=size,
+        fps=fps,
+        spin_sec=spin_sec,
+        hold_sec=hold_sec,
+        gap_sec=gap_sec,
+    )
+    try:
+        return _save_mp4(frames, fps), "mp4"
+    except Exception as e:
+        log.warning("MP4 render failed, fallback to GIF: %s", e)
+        return _save_gif(frames, fps), "gif"
+
+
+def render_multi_round_spin_gif(
+    rounds: list[tuple[list[tuple[str, str, int]], int]],
+    **kwargs: object,
+) -> bytes:
+    data, ext = render_multi_round_spin_media(rounds, **kwargs)  # type: ignore[arg-type]
+    if ext != "gif":
+        log.info("render_multi_round_spin_gif: delivered %s", ext)
+    return data
+
+
+def render_spin_gif(
+    roster: list[tuple[str, str, int]],
+    winner_slot: int,
+    duration_sec: float = 3.0,
+    fps: int = 10,
+) -> bytes:
+    data, _ext = render_multi_round_spin_media(
+        [(roster, winner_slot)],
+        spin_sec=duration_sec,
+        fps=fps,
+        hold_sec=0.8,
+        gap_sec=0.0,
+    )
+    return data

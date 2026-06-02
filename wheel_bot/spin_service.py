@@ -8,7 +8,7 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile
 
 from wheel_bot import db
-from wheel_bot.render_wheel import render_multi_round_spin_gif
+from wheel_bot.render_wheel import render_multi_round_spin_media
 
 
 class _SafeDict(dict[str, Any]):
@@ -171,13 +171,13 @@ async def run_wheel_spin(
         results.append({"round": rnd, "winner_id": winner_id, "prize": float(prize)})
         remaining_rows = [row for row in remaining_rows if int(row[0]) != winner_id]
 
-    gif_bytes = render_multi_round_spin_gif(gif_rounds)
+    media_bytes, media_ext = render_multi_round_spin_media(gif_rounds)
     caption = "\n".join(caption_lines)
     if len(caption) > 1020:
         caption = caption[:1017] + "…"
     await bot.send_animation(
         chat_id,
-        BufferedInputFile(gif_bytes, filename=f"wheel_{sid}.gif"),
+        BufferedInputFile(media_bytes, filename=f"wheel_{sid}.{media_ext}"),
         caption=caption or f"🎡 Колесо #{sid}",
     )
 
