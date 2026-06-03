@@ -361,6 +361,74 @@ button.primary:not(:disabled):active {
   gap: 8px;
 }
 
+.list-participants {
+  gap: 4px;
+}
+
+.card-participant-compact {
+  padding: 4px 6px;
+  margin-bottom: 0;
+  border-radius: 6px;
+}
+
+.card-participant-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.card-participant-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.25;
+}
+
+.card-participant-nick {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e8eaed;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 42%;
+}
+
+.card-participant-desc {
+  font-size: 11px;
+  color: #8892a8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.card-participant-id {
+  font-size: 10px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.card-participant-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 3px;
+  flex-wrap: nowrap;
+}
+
+.btn-participant-mini {
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  min-height: 26px;
+  border-radius: 5px;
+}
+
 .grid2 {
   display: grid;
   grid-template-columns: 1fr 1fr;

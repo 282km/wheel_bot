@@ -567,31 +567,48 @@ function drawSilentWheelCanvas(roster) {
   }
 }
 
+function participantDescHtml(description) {
+  const desc = String(description || "").trim();
+  if (!desc) return "";
+  return `<span class="card-participant-desc" title="${escapeHtml(desc)}">${escapeHtml(desc)}</span>`;
+}
+
+function buildParticipantCardHtml(p, rowNum, actionsHtml) {
+  return `
+    <div class="card-participant-row">
+      <span class="wheel-num" aria-hidden="true">${rowNum}</span>
+      <div class="card-participant-main">
+        <span class="card-participant-nick">${escapeHtml(p.poker_nick)}</span>
+        ${participantDescHtml(p.description)}
+        <span class="card-participant-id">#${p.id}</span>
+      </div>
+      <div class="card-participant-actions">${actionsHtml}</div>
+    </div>`;
+}
+
 function renderParticipants() {
   const root = $("#plist");
   if (!root) return;
   root.innerHTML = "";
-  const visible = allParticipants.filter((x) => !x.is_hidden);
+  const visible = allParticipants
+    .filter((x) => !x.is_hidden)
+    .sort((a, b) =>
+      String(a.poker_nick || "").localeCompare(String(b.poker_nick || ""), "ru", { sensitivity: "base" })
+    );
   if (!visible.length) {
-    root.innerHTML = '<div class="card"><small>Список пуст. Добавьте участника формой выше.</small></div>';
+    root.innerHTML = '<div class="card card-participant-compact"><small>Список пуст. Добавьте участника формой выше.</small></div>';
     return;
   }
-  for (const p of visible) {
+  visible.forEach((p, index) => {
     const div = document.createElement("div");
-    div.className = "card";
-    const hiddenBadge = p.is_hidden ? ' <small>(скрыт)</small>' : "";
-    const hideLabel = p.is_hidden ? "Показать" : "Скрыть";
-    div.innerHTML = `
-      <div><strong>${escapeHtml(p.poker_nick)}</strong> <small>#${p.id}</small>${hiddenBadge}</div>
-      <div><small>${escapeHtml(p.description || "")}</small></div>
-      <div class="row" style="margin-top:8px">
-        <button data-act="edit" data-id="${p.id}" type="button">Изменить</button>
-        <button data-act="hide" data-id="${p.id}" type="button">${hideLabel}</button>
-        <button data-act="del" data-id="${p.id}" type="button">Удалить</button>
-      </div>
-    `;
+    div.className = "card card-participant-compact";
+    const actionsHtml = `
+        <button class="btn-participant-mini" data-act="edit" data-id="${p.id}" type="button" title="Изменить">Изм.</button>
+        <button class="btn-participant-mini" data-act="hide" data-id="${p.id}" type="button" title="Скрыть из списка">Скрыть</button>
+        <button class="btn-participant-mini" data-act="del" data-id="${p.id}" type="button" title="Удалить">Удал.</button>`;
+    div.innerHTML = buildParticipantCardHtml(p, index + 1, actionsHtml);
     root.appendChild(div);
-  }
+  });
   root.onclick = async (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;
@@ -629,23 +646,23 @@ function renderHiddenParticipants() {
   const root = $("#hidden-plist");
   if (!root) return;
   root.innerHTML = "";
-  const hidden = allParticipants.filter((x) => x.is_hidden);
+  const hidden = allParticipants
+    .filter((x) => x.is_hidden)
+    .sort((a, b) =>
+      String(a.poker_nick || "").localeCompare(String(b.poker_nick || ""), "ru", { sensitivity: "base" })
+    );
   if (!hidden.length) {
-    root.innerHTML = '<div class="card"><small>Скрытых участников нет.</small></div>';
+    root.innerHTML = '<div class="card card-participant-compact"><small>Скрытых участников нет.</small></div>';
     return;
   }
-  for (const p of hidden) {
+  hidden.forEach((p, index) => {
     const div = document.createElement("div");
-    div.className = "card";
-    div.innerHTML = `
-      <div><strong>${escapeHtml(p.poker_nick)}</strong> <small>#${p.id}</small></div>
-      <div><small>${escapeHtml(p.description || "")}</small></div>
-      <div class="row" style="margin-top:8px">
-        <button data-act="unhide" data-id="${p.id}" type="button">Вернуть в общий список</button>
-      </div>
-    `;
+    div.className = "card card-participant-compact";
+    const actionsHtml = `
+        <button class="btn-participant-mini" data-act="unhide" data-id="${p.id}" type="button" title="Вернуть в общий список">Вернуть</button>`;
+    div.innerHTML = buildParticipantCardHtml(p, index + 1, actionsHtml);
     root.appendChild(div);
-  }
+  });
   root.onclick = async (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;
