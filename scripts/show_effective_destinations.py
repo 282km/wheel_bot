@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Показать, куда бот шлёт посты и где ждёт /stat (env + app_kv)."""
+"""Показать, куда бот шлёт посты и где ждёт /stat (только .env)."""
 from __future__ import annotations
 
 import asyncio
@@ -23,13 +23,9 @@ async def _run() -> int:
     finally:
         await conn.close()
 
-    print("=== Из .env ===")
-    print("TARGET_CHAT_ID (stats):", cfg["env_stats_chat_id"])
-    print("WHEEL_CHANNEL_ID:      ", cfg["env_channel_chat_id"])
-    print()
-    print("=== app_kv (WebApp «Админ», если сохраняли) ===")
-    print("cfg_stats_chat_id:     ", cfg["kv_stats_chat_id"] or "(нет, берётся из .env)")
-    print("cfg_wheel_channel_id:  ", cfg["kv_channel_chat_id"] or "(нет, берётся из .env)")
+    print("=== Из .env (единственный источник ID) ===")
+    print("TARGET_CHAT_ID (stats):", settings.target_chat_id)
+    print("WHEEL_CHANNEL_ID:      ", settings.wheel_channel_id)
     print()
     print("=== Фактически используется ===")
     print("Чат для /stat и БД:    ", cfg["stats_chat_id"])
@@ -38,10 +34,8 @@ async def _run() -> int:
     print("Куда уходят посты:     ", cfg["post_chat_id"])
     print()
     if cfg["channel_chat_id"] is not None and int(cfg["stats_chat_id"]) == int(cfg["channel_chat_id"]):
-        print("ОШИБКА: ID чата и канала совпадают — исправьте WebApp или .env")
+        print("ОШИБКА: TARGET_CHAT_ID и WHEEL_CHANNEL_ID совпадают в .env")
         return 1
-    if int(cfg["stats_chat_id"]) != int(cfg["env_stats_chat_id"]):
-        print("Внимание: stats_chat_id переопределён в app_kv (не совпадает с .env)")
     return 0
 
 

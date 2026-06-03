@@ -140,11 +140,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     log = logging.getLogger("wheel_bot.bot")
 
     from wheel_bot.destinations import read_destination_config
-    from wheel_bot.posting import get_effective_stats_chat_id
+    from wheel_bot.posting import get_stats_chat_id
 
-    async def _configured_stats_chat_id() -> int:
-        async with db_lock:
-            return await get_effective_stats_chat_id(conn, settings)
+    def _configured_stats_chat_id() -> int:
+        return get_stats_chat_id(settings)
 
     async def _stats_chat_mismatch_reply(message: Message, target_id: int) -> bool:
         chat_id = int(message.chat.id)
@@ -155,8 +154,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             "⚠️ Статистика для этого бота привязана к другому чату.\n\n"
             f"ID этого чата: `{chat_id}`\n"
             f"В настройках бота: `{target_id}`\n\n"
-            "Укажите правильный ID во вкладке «Админ» WebApp (поле «ID чата») "
-            "или в `TARGET_CHAT_ID` в `.env` на сервере, затем перезапустите бота.\n\n"
+            "Задайте `TARGET_CHAT_ID` в `.env` на сервере (ID этого чата), "
+            "затем `sudo systemctl restart wheel-bot`.\n\n"
             "Для проверки ID админ может написать здесь: /chatid"
         )
         try:
@@ -237,7 +236,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 f"Канал для постов колеса: {ch_line}\n"
                 f"Сейчас посты уходят в: `{post_chat_id}` (режим {cfg['post_target']})\n\n"
                 f"{match}\n\n"
-                f"Ожидаемо: чат -1003927403776, канал -1003950795686"
+                f"ID задаются только в .env: TARGET_CHAT_ID и WHEEL_CHANNEL_ID"
             )
             try:
                 await message.answer(text, parse_mode="Markdown")
@@ -256,7 +255,16 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     "Вызовите её в чате, где собирается статистика."
                 )
                 return
-            target_id = await _configured_stats_chat_id()
+            if message.chat.type == "private":
+                target_id = _configured_stats_chat_id()
+                await message.answer(
+                    "Статистика доступна в общем чате команды, не в личке.\n\n"
+                    f"Напишите /stat в чате с ID {target_id}.\n\n"
+                    "Если в BotFather включён Group Privacy — используйте "
+                    "/stat@имя_бота или отключите Privacy Mode."
+                )
+                return
+            target_id = _configured_stats_chat_id()
             chat_id = int(message.chat.id)
             log.info("stat: chat_id=%s target_id=%s type=%s text=%r", chat_id, target_id, message.chat.type, message.text)
             if await _stats_chat_mismatch_reply(message, target_id):
@@ -275,13 +283,13 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     async def stats_cmd(message: Message) -> None:
         await _handle_stat(message)
 
-    @router.message(F.text.lower() == "статистика")
+    @router.message(lambda m: bool(m.text and m.text.strip().lower() == "статистика"))
     async def stats_text(message: Message) -> None:
         await _handle_stat(message)
 
     @router.callback_query(F.data.startswith("stats:"))
     async def stats_answer(cb: CallbackQuery) -> None:
-        target_id = await _configured_stats_chat_id()
+        target_id = _configured_stats_chat_id()
         if not cb.message or int(cb.message.chat.id) != int(target_id):
             await cb.answer()
             return

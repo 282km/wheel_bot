@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260603a" />
+    <link rel="stylesheet" href="./style.css?v=20260603b" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -189,33 +189,11 @@
 
         <section id="tab-admins" class="panel hidden">
           <h2>Админ</h2>
-          <div class="card" style="margin-bottom:12px">
-            <div><strong>ID чата и канала</strong></div>
-            <p class="muted" style="margin:6px 0 10px; font-size:13px">
-              <strong>Чат</strong> (-1003927403776): /stat, «Статистика», история в WebApp, записи в БД.
-              <strong>Канал</strong> (-1003950795686): анонсы, видео и итоги колеса (галка ниже).
-            </p>
-            <div class="muted" style="margin:0 0 4px">ID чата</div>
-            <input
-              id="cfg-stats-chat-id"
-              type="text"
-              inputmode="numeric"
-              placeholder="-100…"
-              autocomplete="off"
-              style="width:100%; margin-bottom:10px"
-            />
-            <div class="muted" style="margin:0 0 4px">ID канала</div>
-            <input
-              id="cfg-wheel-channel-id"
-              type="text"
-              inputmode="numeric"
-              placeholder="-100… (можно оставить пустым)"
-              autocomplete="off"
-              style="width:100%; margin-bottom:10px"
-            />
-            <button id="cfg-chat-ids-save" type="button">Сохранить ID</button>
-            <p id="cfg-chat-ids-status" class="muted" style="margin:8px 0 0; font-size:13px"></p>
-          </div>
+          <p class="muted" style="margin:0 0 12px; font-size:13px">
+            ID чата (<code>TARGET_CHAT_ID</code>) и канала (<code>WHEEL_CHANNEL_ID</code>) задаются только в
+            <code>.env</code> на сервере. После правки — перезапуск <code>wheel-bot</code>.
+            /stat и история — в чате, посты колеса — по галке ниже.
+          </p>
           <div class="card" style="margin-bottom:12px">
             <div><strong>Куда постить колесо</strong></div>
             <label class="row" style="margin:10px 0 8px; cursor:pointer">
@@ -255,6 +233,6 @@
       </p>
     </div>
 
-    <script src="./app.js?v=20260603a"></script>
+    <script src="./app.js?v=20260603b"></script>
   </body>
 </html>

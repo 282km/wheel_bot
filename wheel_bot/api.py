@@ -22,11 +22,10 @@ from wheel_bot import db
 from wheel_bot.config import Settings
 from wheel_bot.session_token import issue_token, make_session_payload, verify_token
 from wheel_bot.posting import (
-    get_effective_stats_chat_id,
-    get_effective_wheel_channel_id,
+    get_stats_chat_id,
+    get_wheel_channel_id,
     get_wheel_post_target,
     resolve_wheel_destinations,
-    set_configured_chat_ids,
     set_wheel_post_target,
     wheel_post_settings_payload,
 )
@@ -200,7 +199,7 @@ def create_app(
             visible_ids = {r.id for r in rows}
             selected = [pid for pid in selected if pid in visible_ids]
             last = [pid for pid in last if pid in visible_ids]
-            stats_chat_id = await get_effective_stats_chat_id(conn, settings)
+            stats_chat_id = get_stats_chat_id(settings)
             silent_flow = await _silent_flow_payload(conn, stats_chat_id)
             return JSONResponse(
                 {
@@ -407,7 +406,7 @@ def create_app(
             payload = await _auth(request, settings)
             if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
-            stats_chat_id = await get_effective_stats_chat_id(conn, settings)
+            stats_chat_id = get_stats_chat_id(settings)
             rows = await db.list_wheel_history(conn, stats_chat_id, limit=200)
             return JSONResponse({"items": rows})
         except Exception as e:
@@ -499,21 +498,6 @@ def create_app(
             if "target" in body:
                 target = str(body.get("target") or "").strip().lower()
                 await set_wheel_post_target(conn, target)
-            if "stats_chat_id" in body or "wheel_channel_id" in body:
-                stats_chat_id = await get_effective_stats_chat_id(conn, settings)
-                channel_chat_id = await get_effective_wheel_channel_id(conn, settings)
-                if "stats_chat_id" in body:
-                    stats_chat_id = int(body.get("stats_chat_id"))
-                if "wheel_channel_id" in body:
-                    ch_raw = body.get("wheel_channel_id")
-                    if ch_raw is None or str(ch_raw).strip() == "":
-                        channel_chat_id = None
-                    else:
-                        channel_chat_id = int(ch_raw)
-                from wheel_bot.destinations import validate_destination_ids
-
-                validate_destination_ids(stats_chat_id, channel_chat_id)
-                await set_configured_chat_ids(conn, stats_chat_id, channel_chat_id)
             target = await get_wheel_post_target(conn)
             return JSONResponse(await wheel_post_settings_payload(conn, settings, target))
         except Exception as e:
@@ -525,7 +509,7 @@ def create_app(
             if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
             admin_id = int(payload["tg_id"])
-            chat_id = await get_effective_stats_chat_id(conn, settings)
+            chat_id = get_stats_chat_id(settings)
             text = (
                 "✅ Тестовое сообщение от WebApp «Колесо» (чат).\n"
                 f"Админ: {admin_id}\n"
@@ -542,7 +526,7 @@ def create_app(
             payload = await _auth(request, settings)
             if _role_rank(str(payload.get("role"))) < _role_rank("admin"):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
-            channel_id = await get_effective_wheel_channel_id(conn, settings)
+            channel_id = get_wheel_channel_id(settings)
             if channel_id is None:
                 return JSONResponse({"error": "ID канала не задан"}, status_code=400)
             admin_id = int(payload["tg_id"])

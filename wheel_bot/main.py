@@ -30,8 +30,15 @@ async def run() -> None:
         await bootstrap_users(conn, settings.superadmin_ids)
 
         try:
-            from wheel_bot.destinations import log_effective_destinations
+            from wheel_bot.destinations import log_effective_destinations, validate_destination_ids
+            from wheel_bot.posting import clear_legacy_destination_kv, get_wheel_channel_id
 
+            if await clear_legacy_destination_kv(conn):
+                log.info("Removed legacy app_kv chat/channel overrides (IDs now only from .env)")
+            validate_destination_ids(
+                settings.target_chat_id,
+                get_wheel_channel_id(settings),
+            )
             await log_effective_destinations(conn, settings)
         except Exception:
             log.exception("Destination log skipped (check wheel_bot/destinations.py)")
