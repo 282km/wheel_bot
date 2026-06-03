@@ -208,6 +208,12 @@ button.primary:not(:disabled):active {
   background: #121622;
 }
 
+.drop.is-reordering {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .card {
   border: 1px solid #333;
   border-radius: 10px;
@@ -232,6 +238,17 @@ button.primary:not(:disabled):active {
   align-items: center;
   gap: 6px;
   min-height: 28px;
+}
+
+.card-wheel-grip {
+  flex-shrink: 0;
+  width: 14px;
+  color: #5eead4;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.75;
+  cursor: grab;
+  touch-action: none;
 }
 
 .card-wheel-main {
