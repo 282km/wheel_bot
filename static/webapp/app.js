@@ -1238,7 +1238,6 @@ function renderHistory() {
       <div><strong>Колесо #${it.id}</strong></div>
       <div><small>Дата: ${escapeHtml(it.created_at)}</small></div>
       <div><small>Кто занёс: ${escapeHtml(it.depositor_nick || "—")}</small></div>
-      <div><small>Сумма заноса: ${fmtMoney(it.deposit_amount)}</small></div>
       <div><small>Призовой фонд: ${fmtMoney(it.prizes_sum)}</small></div>
       <div><small>Победителей: ${Number(it.winners_count || 0)}</small></div>
       <div style="margin-top:6px"><small>Победители:</small><br/><small>${winners || "—"}</small></div>
@@ -1526,9 +1525,6 @@ async function boot() {
   }
 
   const syncSilentFields = () => {
-    if ($("#deposit_amount-silent") && $("#deposit_amount")) {
-      $("#deposit_amount-silent").value = $("#deposit_amount").value;
-    }
     if ($("#prizes-silent") && $("#prizes")) {
       $("#prizes-silent").value = $("#prizes").value;
     }
@@ -1542,7 +1538,7 @@ async function boot() {
   $("#spin").addEventListener("click", async (e) => {
     const btn = e.currentTarget;
     const depositor_id = Number($("#depositor").value || "0");
-    const deposit_amount = Number($("#deposit_amount").value || "0");
+    const deposit_amount = 0;
     const prizesRaw = String($("#prizes").value || "")
       .split(/\r?\n/)
       .map((x) => x.trim())
@@ -1590,7 +1586,7 @@ async function boot() {
       spinBtn.disabled = true;
       updateSilentWheelControls();
       const depositor_id = Number($("#depositor-silent")?.value || "0");
-      const deposit_amount = Number($("#deposit_amount-silent")?.value || "0");
+      const deposit_amount = 0;
       const prizesRaw = String($("#prizes-silent")?.value || "")
         .split(/\r?\n/)
         .map((x) => x.trim())
@@ -1717,7 +1713,7 @@ async function boot() {
         return;
       }
       const depositor_id = Number($("#depositor-silent")?.value || "0");
-      const deposit_amount = Number($("#deposit_amount-silent")?.value || "0");
+      const deposit_amount = 0;
       const prizesRaw = String($("#prizes-silent")?.value || "")
         .split(/\r?\n/)
         .map((x) => x.trim())

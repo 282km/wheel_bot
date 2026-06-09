@@ -27,45 +27,23 @@ async def stats_summary(conn: aiosqlite.Connection, chat_id: int, period: Period
 
     row = await (
         await conn.execute(
-            f"SELECT COUNT(*) AS c, COALESCE(SUM(deposit_amount),0) AS s FROM wheel_sessions WHERE chat_id = ?{date_clause_ws}",
+            f"SELECT COUNT(*) AS c FROM wheel_sessions WHERE chat_id = ?{date_clause_ws}",
             params_main,
         )
     ).fetchone()
     wheels = int(row["c"])
-    deposit_sum = float(row["s"])
     prizes_sum = await _total_prizes_sum(conn, chat_id, _date_clause_for_alias(params_date, "s"), params_date)
 
-    top_depositors = await _top_depositors(conn, chat_id, date_clause_ws, params_date)
-    top_allocated = await _top_allocated_by_depositor(conn, chat_id, _date_clause_for_alias(params_date, "s"), params_date)
     top_win_sum = await _top_win_sum(conn, chat_id, _date_clause_for_alias(params_date, "s"), params_date)
     top_win_cnt = await _top_win_cnt(conn, chat_id, _date_clause_for_alias(params_date, "s"), params_date)
 
     return {
         "period": period,
         "wheels_count": wheels,
-        "deposits_sum": deposit_sum,
         "prizes_sum": prizes_sum,
-        "top_depositors": top_depositors,
-        "top_allocated": top_allocated,
         "top_win_amounts": top_win_sum,
         "top_win_counts": top_win_cnt,
     }
-
-
-async def _top_depositors(conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]) -> list[dict[str, Any]]:
-    sql = f"""
-    SELECT p.poker_nick AS nick, p.description AS description, SUM(s.deposit_amount) AS total
-    FROM wheel_sessions s
-    JOIN participants p ON p.id = s.depositor_id
-    WHERE s.chat_id = ?{_date_clause_for_alias(params_date, "s")}
-    GROUP BY p.id
-    ORDER BY total DESC
-    LIMIT 5
-    """
-    params: list[Any] = [chat_id, *params_date]
-    cur = await conn.execute(sql, params)
-    rows = await cur.fetchall()
-    return [{"nick": _label(str(r["nick"]), r["description"]), "amount": float(r["total"])} for r in rows]
 
 
 async def _top_win_sum(conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]) -> list[dict[str, Any]]:
@@ -100,25 +78,6 @@ async def _top_win_cnt(conn: aiosqlite.Connection, chat_id: int, date_clause: st
     cur = await conn.execute(sql, params)
     rows = await cur.fetchall()
     return [{"nick": _label(str(r["nick"]), r["description"]), "wins": int(r["cnt"])} for r in rows]
-
-
-async def _top_allocated_by_depositor(
-    conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]
-) -> list[dict[str, Any]]:
-    sql = f"""
-    SELECT p.poker_nick AS nick, p.description AS description, COALESCE(SUM(w.prize_amount), 0) AS total
-    FROM wheel_sessions s
-    JOIN participants p ON p.id = s.depositor_id
-    LEFT JOIN wheel_spins w ON w.session_id = s.id
-    WHERE s.chat_id = ?{date_clause}
-    GROUP BY p.id
-    ORDER BY total DESC
-    LIMIT 5
-    """
-    params: list[Any] = [chat_id, *params_date]
-    cur = await conn.execute(sql, params)
-    rows = await cur.fetchall()
-    return [{"nick": _label(str(r["nick"]), r["description"]), "amount": float(r["total"])} for r in rows]
 
 
 def _date_clause_for_alias(params_date: list[Any], alias: str) -> str:

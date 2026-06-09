@@ -533,7 +533,6 @@ MESSAGE_TEMPLATE_DEFAULTS: dict[str, str] = {
     "announce": (
         "🎡 Стартует колесо #{wheel_id}\n"
         "💸 Кто занёс: {depositor}\n"
-        "💵 Сумма заноса: ${deposit_amount}\n"
         "💰 Призовой фонд колеса: ${prize_pool}\n"
         "🏆 Количество победителей: {winners_count}\n"
         "📋 Суммы по победителям:\n"
@@ -543,7 +542,7 @@ MESSAGE_TEMPLATE_DEFAULTS: dict[str, str] = {
     "round_caption": "🎯 Раунд {round}: {winner} — приз ${prize} 💵🍀",
     "finish": (
         "✅ Колесо #{wheel_id} завершено!\n"
-        "💸 Занёс: {depositor}, сумма заноса: ${deposit_amount}\n"
+        "💸 Занёс: {depositor}\n"
         "🏆 Победители:\n"
         "{winner_lines}\n\n"
         "🤝 Спасибо за колесо, {depositor}!\n"
