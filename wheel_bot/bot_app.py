@@ -59,8 +59,18 @@ def _format_stats_block(data: dict[str, Any]) -> str:
         f"🎡 Колес за период: {data.get('wheels_count', 0)}",
         f"🏦 Сумма колес: {_fmt_money(float(data.get('prizes_sum', 0)))}",
         "",
-        "🏆 Топ-5 по сумме выигрышей в колесах:",
+        "🧾🍀 Топ-5 игрок выделил на колёса:",
     ]
+    for i, row in enumerate(data.get("top_allocated") or [], start=1):
+        lines.append(f"{i} место")
+        lines.append(f"👤 {row['nick']}")
+        lines.append(f"💸 {_fmt_money(float(row['amount']))}")
+        lines.append("")
+    if not data.get("top_allocated"):
+        lines.append("— нет данных")
+        lines.append("")
+
+    lines.extend(["", "🏆 Топ-5 по сумме выигрышей в колесах:"])
     for i, row in enumerate(data.get("top_win_amounts") or [], start=1):
         lines.append(f"{i} место")
         lines.append(f"👤 {row['nick']}")
