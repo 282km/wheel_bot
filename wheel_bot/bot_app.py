@@ -141,8 +141,49 @@ def _is_chatid_command(message: Message) -> bool:
     return _first_command_token(message.text) == "/chatid"
 
 
+_NICK_ACTION_STEMS: tuple[str, ...] = (
+    "писат",
+    "пишу",
+    "пиш ",
+    "озвуч",
+    "предлож",
+    "скаж",
+    "сказ",
+    "назов",
+    "назва",
+    "добав",
+    "отправ",
+    "скин",
+    "напиш",
+    "продикт",
+    "впис",
+    "называ",
+    "запиш",
+    "вбив",
+    "внош",
+    "подам",
+    "кину",
+    "кида",
+    "дава",
+    "даю",
+    "говор",
+    "дикт",
+)
+
+_NICK_QUESTION_CUES: tuple[str, ...] = (
+    "можно",
+    "можно ли",
+    "уже",
+    "когда",
+    "разреш",
+    "пора",
+    "стоит",
+    "нужно",
+)
+
+
 def _is_nick_write_question(message: Message) -> bool:
-    """Вопрос вроде «ник писать?», «пишу?» в чате колеса."""
+    """Вопросы про ник: «пишу?», «озвучу свой ник?», «ник писать?» и т.п."""
     if not message.text:
         return False
     raw = message.text.strip()
@@ -151,12 +192,30 @@ def _is_nick_write_question(message: Message) -> bool:
     t = raw.lower()
     if "статистик" in t:
         return False
+
     if re.fullmatch(r"пишу\s*\?", raw, flags=re.IGNORECASE):
         return True
     if re.fullmatch(r"пишу\s+ник\s*\??", raw, flags=re.IGNORECASE):
         return True
+    if re.fullmatch(
+        r"(?:озвучу|предложу|скажу|назову|напишу|кидаю|отправлю|добавлю|запишу|внесу|"
+        r"продиктую|впишу|называю)\s+(?:свой\s+)?ник\s*\??",
+        raw,
+        flags=re.IGNORECASE,
+    ):
+        return True
+
     if "ник" not in t:
         return False
+
+    has_action = any(stem in t for stem in _NICK_ACTION_STEMS)
+    has_cue = "?" in raw or any(w in t for w in _NICK_QUESTION_CUES)
+
+    if has_action and has_cue:
+        return True
+    if re.search(r"свой\s+ник", t) and has_cue:
+        return True
+
     if re.search(r"ник\s+писат", t) or re.search(r"писат\w*\s+ник", t):
         return True
     if re.search(r"можно\s+.*ник", t) and "писат" in t:
@@ -166,6 +225,11 @@ def _is_nick_write_question(message: Message) -> bool:
     if re.search(r"когда\s+.*ник", t) and ("писат" in t or "?" in raw):
         return True
     if re.search(r"ник\s*\?", t) and any(w in t for w in ("можно", "уже", "когда", "писат", "пиш")):
+        return True
+    # «ник давать?», «ник кидать?» — ник + глагол + вопрос
+    if re.search(r"ник\s+\S+", t) and "?" in raw:
+        return True
+    if re.search(r"\S+\s+ник\s*\?", t):
         return True
     return False
 
