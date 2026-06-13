@@ -345,7 +345,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 return
             reply = secrets.choice(NICK_WRITE_WAIT_REPLIES)
             log.info("nick_write_wait: chat_id=%s text=%r -> %r", chat_id, message.text, reply)
-            await message.answer(reply)
+            await message.reply(reply)
         except TelegramForbiddenError:
             log.warning("nick_write_wait: no send permission in chat %s", message.chat.id)
         except Exception:
