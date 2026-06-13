@@ -251,6 +251,8 @@ def _is_nick_write_question(message: Message) -> bool:
     if "статистик" in t:
         return False
 
+    if re.fullmatch(r"pishu\s*\?", raw, re.IGNORECASE):
+        return True
     if re.fullmatch(r"пишу\s*\?", t):
         return True
     if re.fullmatch(r"пишу\s+ник\s*\??", t):
