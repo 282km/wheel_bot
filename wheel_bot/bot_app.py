@@ -210,34 +210,52 @@ _HOMOGLYPH_TO_CYR = str.maketrans(
 
 _NICK_WORD_RE = re.compile(r"[нn][иiu1l][кk]", re.IGNORECASE)
 
+# Синонимы «ника» → «ник» для единых правил (псевдоним, никнейм, nickname …).
+_NICK_SYNONYM_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"никнейм"), "ник"),
+    (re.compile(r"nickname"), "ник"),
+    (re.compile(r"псевдоним"), "ник"),
+    (re.compile(r"pseudonym"), "ник"),
+)
+
 
 def _normalize_chat_text(text: str) -> str:
     text = text.lower().replace("ё", "е")
     return text.translate(_HOMOGLYPH_TO_CYR)
 
 
+def _normalize_for_nick_match(text: str) -> str:
+    """Кириллица + homoglyph + псевдоним/никнейм → единый «ник» в тексте."""
+    t = _normalize_chat_text(text)
+    for pattern, replacement in _NICK_SYNONYM_PATTERNS:
+        t = pattern.sub(replacement, t)
+    return t
+
+
 def _contains_nick_word(text: str) -> bool:
-    """«ник», в т.ч. нuк, nik, n1k."""
-    norm = _normalize_chat_text(text)
+    """«ник», нuк, nik, псевдоним, никнейm, nickname …"""
+    norm = _normalize_for_nick_match(text)
     if "ник" in norm:
         return True
     return _NICK_WORD_RE.search(text) is not None
 
 
 def _is_nick_write_question(message: Message) -> bool:
-    """Вопросы и заявления про ник: «пишу?», «продублирую ник», «ник давать?»."""
+    """Вопросы про ник / псевдоним / никнейм: «пишу?», «продублирую ник» …"""
     if not message.text:
         return False
     raw = message.text.strip()
     if not raw or raw.startswith("/"):
         return False
-    t = _normalize_chat_text(raw)
+    t = _normalize_for_nick_match(raw)
     if "статистик" in t:
         return False
 
     if re.fullmatch(r"пишу\s*\?", t):
         return True
     if re.fullmatch(r"пишу\s+ник\s*\??", t):
+        return True
+    if re.fullmatch(r"(?:свой\s+)?ник\s*\??", t):
         return True
     if re.fullmatch(
         r"(?:озвучу|предложу|скажу|назову|напишу|кидаю|отправлю|добавлю|запишу|внесу|"
