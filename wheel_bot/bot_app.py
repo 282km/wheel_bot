@@ -153,6 +153,8 @@ def _is_nick_write_question(message: Message) -> bool:
         return False
     if re.fullmatch(r"пишу\s*\?", raw, flags=re.IGNORECASE):
         return True
+    if re.fullmatch(r"пишу\s+ник\s*\??", raw, flags=re.IGNORECASE):
+        return True
     if "ник" not in t:
         return False
     if re.search(r"ник\s+писат", t) or re.search(r"писат\w*\s+ник", t):
