@@ -173,6 +173,7 @@ _NICK_ACTION_STEMS: tuple[str, ...] = (
     "дикт",
 )
 
+
 _NICK_QUESTION_CUES: tuple[str, ...] = (
     "можно",
     "можно ли",
@@ -185,6 +186,44 @@ _NICK_QUESTION_CUES: tuple[str, ...] = (
 )
 
 
+_HOMOGLYPH_TO_CYR = str.maketrans(
+    {
+        "a": "а",
+        "b": "в",
+        "c": "с",
+        "e": "е",
+        "o": "о",
+        "p": "р",
+        "x": "х",
+        "y": "у",
+        "k": "к",
+        "h": "н",
+        "n": "н",
+        "u": "и",
+        "i": "и",
+        "m": "м",
+        "t": "т",
+        "1": "и",
+        "@": "а",
+    }
+)
+
+_NICK_WORD_RE = re.compile(r"[нn][иiu1l][кk]", re.IGNORECASE)
+
+
+def _normalize_chat_text(text: str) -> str:
+    text = text.lower().replace("ё", "е")
+    return text.translate(_HOMOGLYPH_TO_CYR)
+
+
+def _contains_nick_word(text: str) -> bool:
+    """«ник», в т.ч. нuк, nik, n1k."""
+    norm = _normalize_chat_text(text)
+    if "ник" in norm:
+        return True
+    return _NICK_WORD_RE.search(text) is not None
+
+
 def _is_nick_write_question(message: Message) -> bool:
     """Вопросы и заявления про ник: «пишу?», «продублирую ник», «ник давать?»."""
     if not message.text:
@@ -192,23 +231,22 @@ def _is_nick_write_question(message: Message) -> bool:
     raw = message.text.strip()
     if not raw or raw.startswith("/"):
         return False
-    t = raw.lower()
+    t = _normalize_chat_text(raw)
     if "статистик" in t:
         return False
 
-    if re.fullmatch(r"пишу\s*\?", raw, flags=re.IGNORECASE):
+    if re.fullmatch(r"пишу\s*\?", t):
         return True
-    if re.fullmatch(r"пишу\s+ник\s*\??", raw, flags=re.IGNORECASE):
+    if re.fullmatch(r"пишу\s+ник\s*\??", t):
         return True
     if re.fullmatch(
         r"(?:озвучу|предложу|скажу|назову|напишу|кидаю|отправлю|добавлю|запишу|внесу|"
         r"продиктую|впишу|называю)\s+(?:свой\s+)?ник\s*\??",
-        raw,
-        flags=re.IGNORECASE,
+        t,
     ):
         return True
 
-    if "ник" not in t:
+    if not _contains_nick_word(raw):
         return False
 
     has_action = any(stem in t for stem in _NICK_ACTION_STEMS)
@@ -241,7 +279,7 @@ def _is_nick_write_question(message: Message) -> bool:
         t,
     ):
         return True
-    if "ник" in t and any(stem in t for stem in _NICK_ACTION_STEMS):
+    if _contains_nick_word(raw) and any(stem in t for stem in _NICK_ACTION_STEMS):
         return True
     return False
 
