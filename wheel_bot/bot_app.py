@@ -166,6 +166,9 @@ _NICK_ACTION_STEMS: tuple[str, ...] = (
     "кида",
     "дава",
     "даю",
+    "продуб",
+    "дублир",
+    "повтор",
     "говор",
     "дикт",
 )
@@ -183,7 +186,7 @@ _NICK_QUESTION_CUES: tuple[str, ...] = (
 
 
 def _is_nick_write_question(message: Message) -> bool:
-    """Вопросы про ник: «пишу?», «озвучу свой ник?», «ник писать?» и т.п."""
+    """Вопросы и заявления про ник: «пишу?», «продублирую ник», «ник давать?»."""
     if not message.text:
         return False
     raw = message.text.strip()
@@ -230,6 +233,15 @@ def _is_nick_write_question(message: Message) -> bool:
     if re.search(r"ник\s+\S+", t) and "?" in raw:
         return True
     if re.search(r"\S+\s+ник\s*\?", t):
+        return True
+    # «продублирую ник», «скину свой ник» — без вопросительного знака
+    if re.search(
+        r"(?:продуб|дубли|повтор|скин|кида|пиш|озвуч|предлож|назов|напиш|отправ|"
+        r"даю|дава|запиш|добав|внес|впиш|называ)\w*\s+(?:свой\s+)?ник\b",
+        t,
+    ):
+        return True
+    if "ник" in t and any(stem in t for stem in _NICK_ACTION_STEMS):
         return True
     return False
 
