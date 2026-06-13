@@ -142,7 +142,7 @@ def _is_chatid_command(message: Message) -> bool:
 
 
 def _is_nick_write_question(message: Message) -> bool:
-    """Вопрос вроде «ник писать?» / «можно ник писать» в чате колеса."""
+    """Вопрос вроде «ник писать?», «пишу?» в чате колеса."""
     if not message.text:
         return False
     raw = message.text.strip()
@@ -151,6 +151,8 @@ def _is_nick_write_question(message: Message) -> bool:
     t = raw.lower()
     if "статистик" in t:
         return False
+    if re.fullmatch(r"пишу\s*\?", raw, flags=re.IGNORECASE):
+        return True
     if "ник" not in t:
         return False
     if re.search(r"ник\s+писат", t) or re.search(r"писат\w*\s+ник", t):
