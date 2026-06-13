@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import secrets
 from typing import Any
 
 import aiosqlite
@@ -28,6 +30,34 @@ PERIOD_LABELS: dict[str, str] = {
     "prev_month": "Прошлый месяц",
     "cur_month": "Текущий месяц",
 }
+
+# Ответы в чате статистики на «ник писать?» и похожие вопросы.
+NICK_WRITE_WAIT_REPLIES: tuple[str, ...] = (
+    "Ещё не вечер.",
+    "Пока рано.",
+    "Подожди немного.",
+    "Не спеши — колесо само не убежит.",
+    "Рано ещё ник подавать.",
+    "Потерпи чуть-чуть.",
+    "Сейчас не время.",
+    "Не торопись — объявят.",
+    "Погоди, скоро скажут.",
+    "Ещё рановато.",
+    "Не сейчас.",
+    "Подожди — всё в своё время.",
+    "Терпение — ключ к колесу.",
+    "Рано писать ник.",
+    "Объявят, когда можно будет.",
+    "Пока молчи и жди сигнала.",
+    "Ещё не час ников.",
+    "Чуть позже.",
+    "Не торопи события.",
+    "Посиди пока — рано.",
+    "Колесо крутится не по расписанию ников.",
+    "Пока нет — дождись объявления.",
+    "Рано, как утренний рейз без карт.",
+    "Ник подождёт — ты тоже.",
+)
 
 
 def _period_keyboard() -> InlineKeyboardMarkup:
@@ -109,6 +139,31 @@ def _is_chatid_command(message: Message) -> bool:
     if not message.text:
         return False
     return _first_command_token(message.text) == "/chatid"
+
+
+def _is_nick_write_question(message: Message) -> bool:
+    """Вопрос вроде «ник писать?» / «можно ник писать» в чате колеса."""
+    if not message.text:
+        return False
+    raw = message.text.strip()
+    if not raw or raw.startswith("/"):
+        return False
+    t = raw.lower()
+    if "статистик" in t:
+        return False
+    if "ник" not in t:
+        return False
+    if re.search(r"ник\s+писат", t) or re.search(r"писат\w*\s+ник", t):
+        return True
+    if re.search(r"можно\s+.*ник", t) and "писат" in t:
+        return True
+    if re.search(r"ник\s+уже", t) or re.search(r"уже\s+.*ник", t):
+        return True
+    if re.search(r"когда\s+.*ник", t) and ("писат" in t or "?" in raw):
+        return True
+    if re.search(r"ник\s*\?", t) and any(w in t for w in ("можно", "уже", "когда", "писат", "пиш")):
+        return True
+    return False
 
 
 def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
@@ -275,6 +330,24 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     @router.message(lambda m: bool(m.text and m.text.strip().lower() == "статистика"))
     async def stats_text(message: Message) -> None:
         await _handle_stat(message)
+
+    @router.message(lambda message: _is_nick_write_question(message))
+    async def nick_write_wait(message: Message) -> None:
+        """В чате /stat на «ник писать?» — шутливый отказ подождать."""
+        try:
+            if message.chat.type not in ("group", "supergroup"):
+                return
+            chat_id = int(message.chat.id)
+            target_id = _configured_stats_chat_id()
+            if chat_id != int(target_id):
+                return
+            reply = secrets.choice(NICK_WRITE_WAIT_REPLIES)
+            log.info("nick_write_wait: chat_id=%s text=%r -> %r", chat_id, message.text, reply)
+            await message.answer(reply)
+        except TelegramForbiddenError:
+            log.warning("nick_write_wait: no send permission in chat %s", message.chat.id)
+        except Exception:
+            log.exception("nick_write_wait failed for chat %s", message.chat.id)
 
     @router.callback_query(F.data.startswith("stats:"))
     async def stats_answer(cb: CallbackQuery) -> None:
