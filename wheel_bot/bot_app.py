@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-import secrets
 from typing import Any
 
 import aiosqlite
@@ -30,50 +28,6 @@ PERIOD_LABELS: dict[str, str] = {
     "prev_month": "Прошлый месяц",
     "cur_month": "Текущий месяц",
 }
-
-# Ответы в чате статистики на «ник писать?» и похожие вопросы.
-NICK_WRITE_WAIT_REPLIES: tuple[str, ...] = (
-    "Ещё не вечер.",
-    "Пока рано.",
-    "Подожди немного.",
-    "Не спеши — колесо само не убежит.",
-    "Рано ещё ник подавать.",
-    "Потерпи чуть-чуть.",
-    "Сейчас не время.",
-    "Не торопись — объявят.",
-    "Погоди, скоро скажут.",
-    "Ещё рановато.",
-    "Не сейчас.",
-    "Подожди — всё в своё время.",
-    "Терпение — ключ к колесу.",
-    "Рано писать ник.",
-    "Объявят, когда можно будет.",
-    "Пока молчи и жди сигнала.",
-    "Ещё не час ников.",
-    "Чуть позже.",
-    "Не торопи события.",
-    "Посиди пока — рано.",
-    "Колесо крутится не по расписанию ников.",
-    "Пока нет — дождись объявления.",
-    "Ник подождёт — ты тоже.",
-    "Не спеши.",
-    "Позже.",
-    "Позже скажут — не переживай.",
-    "Не сейчас — позже объявят.",
-    "Подожди объявления, не гони.",
-    "Рано спешить некуда.",
-    "Сначала дождись — потом пиши.",
-    "Потом объявят, когда можно.",
-    "Ещё не время ников.",
-    "Не беги вперёд — рано.",
-    "Чуть терпения — и можно будет.",
-    "Пока рано — отложи на потом.",
-    "Не паникуй, время будет.",
-    "Тише едешь — дальше будешь (писать ник).",
-    "Сделай паузу — рано ещё.",
-    "Не всё сразу — погоди немного.",
-    "Дождись сигнала, не торопись.",
-)
 
 
 def _period_keyboard() -> InlineKeyboardMarkup:
@@ -155,169 +109,6 @@ def _is_chatid_command(message: Message) -> bool:
     if not message.text:
         return False
     return _first_command_token(message.text) == "/chatid"
-
-
-_NICK_ACTION_STEMS: tuple[str, ...] = (
-    "писат",
-    "пишу",
-    "пиш ",
-    "озвуч",
-    "предлож",
-    "скаж",
-    "сказ",
-    "назов",
-    "назва",
-    "добав",
-    "отправ",
-    "скин",
-    "напиш",
-    "продикт",
-    "впис",
-    "называ",
-    "запиш",
-    "вбив",
-    "внош",
-    "подам",
-    "кину",
-    "кида",
-    "дава",
-    "даю",
-    "продуб",
-    "дублир",
-    "повтор",
-    "говор",
-    "дикт",
-)
-
-
-_NICK_QUESTION_CUES: tuple[str, ...] = (
-    "можно",
-    "можно ли",
-    "уже",
-    "когда",
-    "разреш",
-    "пора",
-    "стоит",
-    "нужно",
-)
-
-
-_HOMOGLYPH_TO_CYR = str.maketrans(
-    {
-        "a": "а",
-        "b": "в",
-        "c": "с",
-        "e": "е",
-        "o": "о",
-        "p": "р",
-        "x": "х",
-        "y": "у",
-        "k": "к",
-        "h": "н",
-        "n": "н",
-        "u": "и",
-        "i": "и",
-        "m": "м",
-        "t": "т",
-        "1": "и",
-        "@": "а",
-    }
-)
-
-_NICK_WORD_RE = re.compile(r"[нn][иiu1l][кk]", re.IGNORECASE)
-
-# Синонимы «ника» → «ник» для единых правил (псевдоним, никнейм, nickname …).
-_NICK_SYNONYM_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"никнейм"), "ник"),
-    (re.compile(r"nickname"), "ник"),
-    (re.compile(r"псевдоним"), "ник"),
-    (re.compile(r"pseudonym"), "ник"),
-)
-
-
-def _normalize_chat_text(text: str) -> str:
-    text = text.lower().replace("ё", "е")
-    return text.translate(_HOMOGLYPH_TO_CYR)
-
-
-def _normalize_for_nick_match(text: str) -> str:
-    """Кириллица + homoglyph + псевдоним/никнейм → единый «ник» в тексте."""
-    t = _normalize_chat_text(text)
-    for pattern, replacement in _NICK_SYNONYM_PATTERNS:
-        t = pattern.sub(replacement, t)
-    return t
-
-
-def _contains_nick_word(text: str) -> bool:
-    """«ник», нuк, nik, псевдоним, никнейm, nickname …"""
-    norm = _normalize_for_nick_match(text)
-    if "ник" in norm:
-        return True
-    return _NICK_WORD_RE.search(text) is not None
-
-
-def _is_nick_write_question(message: Message) -> bool:
-    """Вопросы про ник / псевдоним / никнейм: «пишу?», «продублирую ник» …"""
-    if not message.text:
-        return False
-    raw = message.text.strip()
-    if not raw or raw.startswith("/"):
-        return False
-    t = _normalize_for_nick_match(raw)
-    if "статистик" in t:
-        return False
-
-    if re.fullmatch(r"pishu\s*\?", raw, re.IGNORECASE):
-        return True
-    if re.fullmatch(r"пишу\s*\?", t):
-        return True
-    if re.fullmatch(r"пишу\s+ник\s*\??", t):
-        return True
-    if re.fullmatch(r"(?:свой\s+)?ник\s*\??", t):
-        return True
-    if re.fullmatch(
-        r"(?:озвучу|предложу|скажу|назову|напишу|кидаю|отправлю|добавлю|запишу|внесу|"
-        r"продиктую|впишу|называю)\s+(?:свой\s+)?ник\s*\??",
-        t,
-    ):
-        return True
-
-    if not _contains_nick_word(raw):
-        return False
-
-    has_action = any(stem in t for stem in _NICK_ACTION_STEMS)
-    has_cue = "?" in raw or any(w in t for w in _NICK_QUESTION_CUES)
-
-    if has_action and has_cue:
-        return True
-    if re.search(r"свой\s+ник", t) and has_cue:
-        return True
-
-    if re.search(r"ник\s+писат", t) or re.search(r"писат\w*\s+ник", t):
-        return True
-    if re.search(r"можно\s+.*ник", t) and "писат" in t:
-        return True
-    if re.search(r"ник\s+уже", t) or re.search(r"уже\s+.*ник", t):
-        return True
-    if re.search(r"когда\s+.*ник", t) and ("писат" in t or "?" in raw):
-        return True
-    if re.search(r"ник\s*\?", t) and any(w in t for w in ("можно", "уже", "когда", "писат", "пиш")):
-        return True
-    # «ник давать?», «ник кидать?» — ник + глагол + вопрос
-    if re.search(r"ник\s+\S+", t) and "?" in raw:
-        return True
-    if re.search(r"\S+\s+ник\s*\?", t):
-        return True
-    # «продублирую ник», «скину свой ник» — без вопросительного знака
-    if re.search(
-        r"(?:продуб|дубли|повтор|скин|кида|пиш|озвуч|предлож|назов|напиш|отправ|"
-        r"даю|дава|запиш|добав|внес|впиш|называ)\w*\s+(?:свой\s+)?ник\b",
-        t,
-    ):
-        return True
-    if _contains_nick_word(raw) and any(stem in t for stem in _NICK_ACTION_STEMS):
-        return True
-    return False
 
 
 def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
@@ -484,24 +275,6 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     @router.message(lambda m: bool(m.text and m.text.strip().lower() == "статистика"))
     async def stats_text(message: Message) -> None:
         await _handle_stat(message)
-
-    @router.message(lambda message: _is_nick_write_question(message))
-    async def nick_write_wait(message: Message) -> None:
-        """В чате /stat на «ник писать?» — шутливый отказ подождать."""
-        try:
-            if message.chat.type not in ("group", "supergroup"):
-                return
-            chat_id = int(message.chat.id)
-            target_id = _configured_stats_chat_id()
-            if chat_id != int(target_id):
-                return
-            reply = secrets.choice(NICK_WRITE_WAIT_REPLIES)
-            log.info("nick_write_wait: chat_id=%s text=%r -> %r", chat_id, message.text, reply)
-            await message.reply(reply)
-        except TelegramForbiddenError:
-            log.warning("nick_write_wait: no send permission in chat %s", message.chat.id)
-        except Exception:
-            log.exception("nick_write_wait failed for chat %s", message.chat.id)
 
     @router.callback_query(F.data.startswith("stats:"))
     async def stats_answer(cb: CallbackQuery) -> None:
