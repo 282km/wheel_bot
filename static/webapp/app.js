@@ -287,6 +287,123 @@ function buildWheelPlainText() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const PRIZES_MIN_ROWS = 3;
+
+function createPrizeRow(roundNo, value = "") {
+  const row = document.createElement("div");
+  row.className = "prize-row";
+
+  const label = document.createElement("span");
+  label.className = "prize-round";
+  label.textContent = `Раунд ${roundNo}`;
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.inputMode = "decimal";
+  input.className = "prize-row-input";
+  input.placeholder = "Сумма $";
+  input.value = value == null ? "" : String(value);
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "prize-row-remove";
+  removeBtn.title = "Убрать раунд";
+  removeBtn.setAttribute("aria-label", `Убрать раунд ${roundNo}`);
+  removeBtn.textContent = "×";
+
+  row.appendChild(label);
+  row.appendChild(input);
+  row.appendChild(removeBtn);
+  return row;
+}
+
+function renumberPrizeRows(rowsEl) {
+  if (!rowsEl) return;
+  const rows = [...rowsEl.querySelectorAll(".prize-row")];
+  rows.forEach((row, i) => {
+    const num = row.querySelector(".prize-round");
+    const roundNo = i + 1;
+    if (num) num.textContent = `Раунд ${roundNo}`;
+    const rm = row.querySelector(".prize-row-remove");
+    if (rm) {
+      rm.disabled = rows.length <= 1;
+      rm.setAttribute("aria-label", `Убрать раунд ${roundNo}`);
+    }
+  });
+}
+
+function getPrizeValuesFromRows(rowsEl) {
+  if (!rowsEl) return [];
+  return [...rowsEl.querySelectorAll(".prize-row-input")].map((inp) => String(inp.value || "").trim());
+}
+
+function readPrizesFromRows(rowsEl) {
+  return getPrizeValuesFromRows(rowsEl)
+    .filter(Boolean)
+    .map((x) => Number(x));
+}
+
+function renderPrizesEditor(rowsEl, values = [], minRows = PRIZES_MIN_ROWS) {
+  if (!rowsEl) return;
+  const vals = Array.isArray(values) ? values : [];
+  const count = Math.max(vals.length, minRows);
+  rowsEl.innerHTML = "";
+  for (let i = 0; i < count; i++) {
+    rowsEl.appendChild(createPrizeRow(i + 1, vals[i] ?? ""));
+  }
+  renumberPrizeRows(rowsEl);
+}
+
+function bindPrizesEditor(editorEl) {
+  if (!editorEl || editorEl.dataset.bound === "1") return;
+  editorEl.dataset.bound = "1";
+  const rowsEl = editorEl.querySelector(".prizes-rows");
+  const addBtn = editorEl.querySelector(".prizes-add-row");
+  if (!rowsEl) return;
+
+  if (addBtn) {
+    addBtn.addEventListener("click", () => {
+      const n = rowsEl.querySelectorAll(".prize-row").length;
+      rowsEl.appendChild(createPrizeRow(n + 1));
+      renumberPrizeRows(rowsEl);
+      const lastInput = rowsEl.querySelector(".prize-row:last-child .prize-row-input");
+      if (lastInput) lastInput.focus();
+    });
+  }
+
+  rowsEl.addEventListener("click", (e) => {
+    const btn = e.target.closest(".prize-row-remove");
+    if (!btn || btn.disabled) return;
+    const row = btn.closest(".prize-row");
+    if (!row) return;
+    row.remove();
+    renumberPrizeRows(rowsEl);
+  });
+}
+
+function copyPrizesBetweenEditors(fromEditor, toEditor) {
+  if (!fromEditor || !toEditor) return;
+  const fromRows = fromEditor.querySelector(".prizes-rows");
+  const toRows = toEditor.querySelector(".prizes-rows");
+  renderPrizesEditor(toRows, getPrizeValuesFromRows(fromRows));
+}
+
+function initPrizesEditors() {
+  const prizesEditor = $("#prizes-editor");
+  const prizesSilentEditor = $("#prizes-silent-editor");
+  if (prizesEditor) {
+    renderPrizesEditor($("#prizes-rows"), [], PRIZES_MIN_ROWS);
+    bindPrizesEditor(prizesEditor);
+  }
+  if (prizesSilentEditor) {
+    renderPrizesEditor($("#prizes-silent-rows"), [], PRIZES_MIN_ROWS);
+    bindPrizesEditor(prizesSilentEditor);
+    if (prizesEditor) {
+      copyPrizesBetweenEditors(prizesEditor, prizesSilentEditor);
+    }
+  }
+}
+
 function wheelPaletteByHue(h) {
   return `hsl(${Number(h || 0)}, 70%, 48%)`;
 }
@@ -1525,10 +1642,9 @@ async function boot() {
   }
 
   const syncSilentFields = () => {
-    if ($("#prizes-silent") && $("#prizes")) {
-      $("#prizes-silent").value = $("#prizes").value;
-    }
+    copyPrizesBetweenEditors($("#prizes-editor"), $("#prizes-silent-editor"));
   };
+  initPrizesEditors();
   syncSilentFields();
 
   $("#history-period").addEventListener("change", () => {
@@ -1539,11 +1655,7 @@ async function boot() {
     const btn = e.currentTarget;
     const depositor_id = Number($("#depositor").value || "0");
     const deposit_amount = 0;
-    const prizesRaw = String($("#prizes").value || "")
-      .split(/\r?\n/)
-      .map((x) => x.trim())
-      .filter(Boolean)
-      .map((x) => Number(x));
+    const prizesRaw = readPrizesFromRows($("#prizes-rows"));
     const announceDelaySec = Number($("#announce_delay_sec").value || "30");
     $("#spin-log").textContent = "Крутим…";
     try {
@@ -1587,11 +1699,7 @@ async function boot() {
       updateSilentWheelControls();
       const depositor_id = Number($("#depositor-silent")?.value || "0");
       const deposit_amount = 0;
-      const prizesRaw = String($("#prizes-silent")?.value || "")
-        .split(/\r?\n/)
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .map((x) => Number(x));
+      const prizesRaw = readPrizesFromRows($("#prizes-silent-rows"));
       const log = $("#spin-silent-log");
       const winnerLine = $("#silent-wheel-winner");
       const sendBtn = $("#silent-send-results");
@@ -1714,11 +1822,7 @@ async function boot() {
       }
       const depositor_id = Number($("#depositor-silent")?.value || "0");
       const deposit_amount = 0;
-      const prizesRaw = String($("#prizes-silent")?.value || "")
-        .split(/\r?\n/)
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .map((x) => Number(x));
+      const prizesRaw = readPrizesFromRows($("#prizes-silent-rows"));
       try {
         await withButtonFeedback(btn, async () => {
           const res = await api("/api/wheel/silent-announce", {

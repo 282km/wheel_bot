@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260603d" />
+    <link rel="stylesheet" href="./style.css?v=20260617a" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -66,10 +66,11 @@
             <select id="depositor"></select>
           </label>
 
-          <label>
-            Призы по раундам в $ (одна сумма на строку)
-            <textarea id="prizes" rows="5" placeholder="500&#10;300&#10;200"></textarea>
-          </label>
+          <div class="prizes-editor" id="prizes-editor">
+            <div class="h">Призы по раундам ($)</div>
+            <div class="prizes-rows" id="prizes-rows"></div>
+            <button type="button" class="prizes-add-row">+ Добавить раунд</button>
+          </div>
           <label>
             Задержка перед стартом кручения (сек)
             <input id="announce_delay_sec" type="number" step="1" min="0" value="30" />
@@ -109,10 +110,11 @@
             <select id="depositor-silent"></select>
           </label>
 
-          <label>
-            Призы по раундам в $ (одна сумма на строку)
-            <textarea id="prizes-silent" rows="5" placeholder="500&#10;300&#10;200"></textarea>
-          </label>
+          <div class="prizes-editor" id="prizes-silent-editor">
+            <div class="h">Призы по раундам ($)</div>
+            <div class="prizes-rows" id="prizes-silent-rows"></div>
+            <button type="button" class="prizes-add-row">+ Добавить раунд</button>
+          </div>
 
           <div class="silent-wheel-wrap">
             <div class="silent-wheel-pointer">▼</div>
@@ -221,6 +223,6 @@
       </p>
     </div>
 
-    <script src="./app.js?v=20260603d"></script>
+    <script src="./app.js?v=20260617a"></script>
   </body>
 </html>

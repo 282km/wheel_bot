@@ -558,6 +558,58 @@ footer {
   font-variant-numeric: tabular-nums;
 }
 
+.prizes-editor {
+  margin-bottom: 12px;
+}
+
+.prizes-editor .h {
+  margin-bottom: 8px;
+}
+
+.prizes-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(50vh, 360px);
+  overflow-y: auto;
+  margin-bottom: 8px;
+  padding-right: 2px;
+}
+
+.prize-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.prize-round {
+  flex: 0 0 auto;
+  min-width: 5.5em;
+  font-size: 12px;
+  font-weight: 700;
+  color: #7ee8d0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.prize-row-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.prize-row-remove {
+  flex: 0 0 auto;
+  width: 34px;
+  min-width: 34px;
+  padding: 6px;
+  line-height: 1;
+  font-size: 18px;
+}
+
+.prizes-add-row {
+  width: 100%;
+}
+
 .silent-dot {
   width: 10px;
   height: 10px;
