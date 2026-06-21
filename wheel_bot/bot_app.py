@@ -18,7 +18,7 @@ from aiogram.types import (
 
 from wheel_bot import db
 from wheel_bot.config import Settings
-from wheel_bot.stats_service import stats_summary
+from wheel_bot.stats_service import losers_summary, stats_summary
 
 
 PERIOD_LABELS: dict[str, str] = {
@@ -95,6 +95,45 @@ def _format_stats_block(data: dict[str, Any]) -> str:
     return text[:3899] + "…"
 
 
+def _format_luz_block(data: dict[str, Any]) -> str:
+    total_spins = int(data.get("total_spins", 0))
+    prizes_sum = float(data.get("prizes_sum", 0))
+    lines = [
+        "📉 Статистика лузеров — вся история",
+        "",
+        f"🎡 Всего розыгрышей: {total_spins}",
+        f"🏦 Разыграно всего: {_fmt_money(prizes_sum)}",
+        "",
+        "😢 Топ-10 по малому числу побед:",
+    ]
+    worst_wins = data.get("worst_wins") or []
+    if not worst_wins:
+        lines.append("— нет активных участников")
+    else:
+        for i, row in enumerate(worst_wins, start=1):
+            wins = int(row["wins"])
+            lines.append(f"{i} место")
+            lines.append(f"👤 {row['nick']}")
+            lines.append(f"📊 Побед: {wins} из {total_spins}")
+            lines.append("")
+
+    lines.extend(["", "💸 Топ-10 по малой сумме выигрышей:"])
+    worst_money = data.get("worst_money") or []
+    if not worst_money:
+        lines.append("— нет активных участников")
+    else:
+        for i, row in enumerate(worst_money, start=1):
+            lines.append(f"{i} место")
+            lines.append(f"👤 {row['nick']}")
+            lines.append(f"💵 Выиграл: {_fmt_money(float(row['amount']))} из {_fmt_money(prizes_sum)}")
+            lines.append("")
+
+    text = "\n".join(lines).strip()
+    if len(text) <= 3900:
+        return text
+    return text[:3899] + "…"
+
+
 def _first_command_token(text: str) -> str:
     return text.strip().split(maxsplit=1)[0].split("@")[0].lower()
 
@@ -103,6 +142,12 @@ def _is_stat_command(message: Message) -> bool:
     if not message.text:
         return False
     return _first_command_token(message.text) == "/stat"
+
+
+def _is_luz_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/luz"
 
 
 def _is_chatid_command(message: Message) -> bool:
@@ -134,13 +179,13 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     def _configured_stats_chat_id() -> int:
         return get_stats_chat_id(settings)
 
-    async def _stats_chat_mismatch_reply(message: Message, target_id: int) -> bool:
+    async def _stats_chat_mismatch_reply(message: Message, target_id: int, command: str = "/stat") -> bool:
         chat_id = int(message.chat.id)
         if chat_id == int(target_id):
             return False
-        log.warning("/stat: chat_id=%s configured_stats_chat=%s", chat_id, target_id)
+        log.warning("%s: chat_id=%s configured_stats_chat=%s", command, chat_id, target_id)
         hint = (
-            "⚠️ Статистика для этого бота привязана к другому чату.\n\n"
+            f"⚠️ Команда {command} для этого бота привязана к другому чату.\n\n"
             f"ID этого чата: `{chat_id}`\n"
             f"В настройках бота: `{target_id}`\n\n"
             "Задайте `TARGET_CHAT_ID` в `.env` на сервере (ID этого чата), "
@@ -165,11 +210,12 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             await message.answer(
                 "Вы администратор колеса.\n"
                 "Откройте приложение кнопкой ниже (не по ссылке в браузере).\n"
-                "Статистика — в общем чате: /stat или «Статистика».",
+                "Статистика — в общем чате: /stat или «Статистика».\n"
+                "Лузеры — /luz.",
                 reply_markup=_admin_webapp_keyboard(settings),
             )
             return
-        await message.answer("В общем чате доступна команда статистики «/stat» или текст «Статистика».")
+        await message.answer("В общем чате: /stat или «Статистика», /luz — статистика лузеров.")
 
     @router.message(Command("app", "webapp"))
     async def cmd_app(message: Message) -> None:
@@ -216,7 +262,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             chat_id = int(message.chat.id)
             channel_id = cfg["channel_chat_id"]
             post_chat_id = cfg["post_chat_id"]
-            match = "✅ совпадает — /stat здесь" if chat_id == target_id else "❌ не совпадает — /stat здесь не сработает"
+            match = "✅ совпадает — /stat и /luz здесь" if chat_id == target_id else "❌ не совпадает — /stat и /luz здесь не сработают"
             ch_line = f"`{channel_id}`" if channel_id is not None else "не задан"
             text = (
                 f"ID этого чата: `{chat_id}`\n"
@@ -267,6 +313,48 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 await message.answer("Ошибка при открытии статистики. Проверьте логи wheel-bot на сервере.")
             except Exception:
                 pass
+
+    async def _handle_luz(message: Message) -> None:
+        try:
+            if message.chat.type == "channel":
+                await message.answer(
+                    "Команда /luz работает в группе (супергруппе), не в канале. "
+                    "Вызовите её в чате, где собирается статистика."
+                )
+                return
+            if message.chat.type == "private":
+                target_id = _configured_stats_chat_id()
+                await message.answer(
+                    "Статистика лузеров доступна в общем чате команды, не в личке.\n\n"
+                    f"Напишите /luz в чате с ID {target_id}.\n\n"
+                    "Если в BotFather включён Group Privacy — используйте "
+                    "/luz@имя_бота или отключите Privacy Mode."
+                )
+                return
+            target_id = _configured_stats_chat_id()
+            chat_id = int(message.chat.id)
+            log.info("luz: chat_id=%s target_id=%s type=%s text=%r", chat_id, target_id, message.chat.type, message.text)
+            if await _stats_chat_mismatch_reply(message, target_id, "/luz"):
+                return
+            async with db_lock:
+                data = await losers_summary(conn, target_id)
+            text = _format_luz_block(data)
+            try:
+                await message.answer(text)
+            except TelegramBadRequest:
+                await message.answer(text.replace("`", ""))
+        except TelegramForbiddenError:
+            log.warning("luz: bot cannot send messages in chat %s", message.chat.id)
+        except Exception:
+            log.exception("luz handler failed for chat %s", message.chat.id)
+            try:
+                await message.answer("Ошибка при открытии статистики лузеров. Проверьте логи wheel-bot на сервере.")
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_luz_command(message))
+    async def luz_cmd(message: Message) -> None:
+        await _handle_luz(message)
 
     @router.message(lambda message: _is_stat_command(message))
     async def stats_cmd(message: Message) -> None:

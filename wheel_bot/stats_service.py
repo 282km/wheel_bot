@@ -126,3 +126,71 @@ async def _total_prizes_sum(conn: aiosqlite.Connection, chat_id: int, date_claus
         )
     ).fetchone()
     return float(row["s"]) if row else 0.0
+
+
+async def _total_spins_count(conn: aiosqlite.Connection, chat_id: int) -> int:
+    row = await (
+        await conn.execute(
+            """
+            SELECT COUNT(*) AS c
+            FROM wheel_spins w
+            JOIN wheel_sessions s ON s.id = w.session_id
+            WHERE s.chat_id = ?
+            """,
+            (chat_id,),
+        )
+    ).fetchone()
+    return int(row["c"]) if row else 0
+
+
+async def losers_summary(conn: aiosqlite.Connection, chat_id: int) -> dict[str, Any]:
+    """Топ лузеров за всю историю среди активных (не скрытых) участников."""
+    total_spins = await _total_spins_count(conn, chat_id)
+    prizes_sum = await _total_prizes_sum(conn, chat_id, "", [])
+
+    win_sql = """
+    SELECT p.poker_nick AS nick, p.description AS description, COUNT(w.id) AS wins
+    FROM participants p
+    LEFT JOIN wheel_spins w ON w.winner_id = p.id
+    LEFT JOIN wheel_sessions s ON s.id = w.session_id AND s.chat_id = ?
+    WHERE p.is_hidden = 0
+    GROUP BY p.id
+    ORDER BY wins ASC, p.poker_nick COLLATE NOCASE ASC
+    LIMIT 10
+    """
+    cur = await conn.execute(win_sql, (chat_id,))
+    worst_wins = [
+        {
+            "nick": _label(str(r["nick"]), r["description"]),
+            "wins": int(r["wins"]),
+            "total_spins": total_spins,
+        }
+        for r in await cur.fetchall()
+    ]
+
+    money_sql = """
+    SELECT p.poker_nick AS nick, p.description AS description, COALESCE(SUM(w.prize_amount), 0) AS total
+    FROM participants p
+    LEFT JOIN wheel_spins w ON w.winner_id = p.id
+    LEFT JOIN wheel_sessions s ON s.id = w.session_id AND s.chat_id = ?
+    WHERE p.is_hidden = 0
+    GROUP BY p.id
+    ORDER BY total ASC, p.poker_nick COLLATE NOCASE ASC
+    LIMIT 10
+    """
+    cur = await conn.execute(money_sql, (chat_id,))
+    worst_money = [
+        {
+            "nick": _label(str(r["nick"]), r["description"]),
+            "amount": float(r["total"]),
+            "prizes_sum": prizes_sum,
+        }
+        for r in await cur.fetchall()
+    ]
+
+    return {
+        "total_spins": total_spins,
+        "prizes_sum": prizes_sum,
+        "worst_wins": worst_wins,
+        "worst_money": worst_money,
+    }
