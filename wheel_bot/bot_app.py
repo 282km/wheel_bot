@@ -96,12 +96,12 @@ def _format_stats_block(data: dict[str, Any]) -> str:
 
 
 def _format_luz_block(data: dict[str, Any]) -> str:
-    total_spins = int(data.get("total_spins", 0))
+    total_wheels = int(data.get("total_wheels", 0))
     prizes_sum = float(data.get("prizes_sum", 0))
     lines = [
         "📉 Статистика лузеров — вся история",
         "",
-        f"🎡 Всего розыгрышей: {total_spins}",
+        f"🎡 Всего колёс: {total_wheels}",
         f"🏦 Разыграно всего: {_fmt_money(prizes_sum)}",
         "",
         "😢 Топ-10 по малому числу побед:",
@@ -114,7 +114,7 @@ def _format_luz_block(data: dict[str, Any]) -> str:
             wins = int(row["wins"])
             lines.append(f"{i} место")
             lines.append(f"👤 {row['nick']}")
-            lines.append(f"📊 Побед: {wins} из {total_spins}")
+            lines.append(f"📊 Побед: {wins} из {total_wheels}")
             lines.append("")
 
     lines.extend(["", "💸 Топ-10 по малой сумме выигрышей:"])
