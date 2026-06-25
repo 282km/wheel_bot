@@ -75,3 +75,14 @@ def format_bonus_result(user_label: str, result: dict[str, Any]) -> str:
     if status == "win":
         return format_bonus_win(user_label, float(result["amount"]))
     return format_bonus_lose(user_label)
+
+
+def format_bonus_admin_notify(user_label: str, telegram_id: int, amount: float) -> str:
+    money = _fmt_money(amount)
+    return (
+        f"🎁 *Выплата бонуса /bonus*\n\n"
+        f"👤 Победитель: {user_label}\n"
+        f"🆔 Telegram ID: `{telegram_id}`\n"
+        f"💰 Сумма: *{money}*\n\n"
+        f"⚠️ *Нужно выплатить приз победителю.*"
+    )

@@ -17,7 +17,7 @@ from aiogram.types import (
 )
 
 from wheel_bot import db
-from wheel_bot.bonus_messages import format_bonus_result
+from wheel_bot.bonus_messages import format_bonus_admin_notify, format_bonus_result
 from wheel_bot.bonus_service import try_daily_bonus
 from wheel_bot.config import Settings
 from wheel_bot.stats_service import losers_summary, participant_wheel_wins, stats_summary
@@ -208,6 +208,35 @@ def _bonus_user_label(message: Message) -> str:
         return f"@{user.username}"
     name = (user.first_name or "").strip()
     return name or "Участник"
+
+
+async def _notify_superadmins_bonus_win(
+    message: Message,
+    settings: Settings,
+    user_label: str,
+    amount: float,
+    log: logging.Logger,
+) -> None:
+    user = message.from_user
+    if not user or not settings.superadmin_ids:
+        return
+    text = format_bonus_admin_notify(user_label, int(user.id), amount)
+    bot = message.bot
+    for admin_id in settings.superadmin_ids:
+        try:
+            await bot.send_message(int(admin_id), text, parse_mode="Markdown")
+        except TelegramBadRequest:
+            try:
+                await bot.send_message(int(admin_id), text.replace("*", "").replace("`", ""))
+            except Exception:
+                log.exception("bonus admin notify: bad request fallback failed for %s", admin_id)
+        except TelegramForbiddenError:
+            log.warning(
+                "bonus admin notify: cannot DM superadmin %s — напишите боту /start в личке",
+                admin_id,
+            )
+        except Exception:
+            log.exception("bonus admin notify failed for superadmin %s", admin_id)
 
 
 def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
@@ -434,11 +463,20 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 return
             async with db_lock:
                 result = await try_daily_bonus(conn, int(user.id), user_label=_bonus_user_label(message))
-            text = format_bonus_result(_bonus_user_label(message), result)
+            user_label = _bonus_user_label(message)
+            text = format_bonus_result(user_label, result)
             try:
                 await message.reply(text, parse_mode="Markdown")
             except TelegramBadRequest:
                 await message.reply(text.replace("*", ""))
+            if result.get("status") == "win":
+                await _notify_superadmins_bonus_win(
+                    message,
+                    settings,
+                    user_label,
+                    float(result["amount"]),
+                    log,
+                )
         except TelegramForbiddenError:
             log.warning("bonus: bot cannot send messages in chat %s", message.chat.id)
         except Exception:
