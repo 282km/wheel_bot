@@ -20,7 +20,7 @@ from starlette.staticfiles import StaticFiles
 
 from wheel_bot import db
 from wheel_bot.config import Settings
-from wheel_bot.morning_digest import generate_morning_digest_text
+from wheel_bot.morning_digest import prepare_morning_digest_post
 from wheel_bot.morning_digest_settings import (
     load_morning_digest_config,
     morning_digest_settings_payload,
@@ -570,6 +570,8 @@ def create_app(
                 kwargs["model"] = str(body.get("model") or "").strip()
             if "hour" in body:
                 kwargs["hour"] = int(body.get("hour"))
+            if "focus_events" in body:
+                kwargs["focus_events"] = str(body.get("focus_events") or "").strip()
             if body.get("clear_api_key"):
                 kwargs["clear_api_key"] = True
             elif "openai_api_key" in body:
@@ -589,8 +591,16 @@ def create_app(
             cfg = await load_morning_digest_config(conn, settings)
             if not cfg.api_key:
                 return JSONResponse({"error": "API ключ не задан"}, status_code=400)
-            text = await generate_morning_digest_text(conn, settings)
-            return JSONResponse({"ok": True, "text": text})
+            post = await prepare_morning_digest_post(conn, settings)
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "text": post.text,
+                    "image_url": post.image_url,
+                    "source_mode": post.source_mode,
+                    "news_title": post.news_title,
+                }
+            )
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 

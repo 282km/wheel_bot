@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 from zoneinfo import ZoneInfo
@@ -14,6 +15,12 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from wheel_bot import db
 from wheel_bot.morning_digest_settings import MorningDigestConfig, load_morning_digest_config
+from wheel_bot.notify import notify_superadmins
+from wheel_bot.poker_news_service import (
+    fetch_poker_news,
+    format_news_context,
+    pick_featured_news,
+)
 
 if TYPE_CHECKING:
     from wheel_bot.config import Settings
@@ -22,6 +29,14 @@ log = logging.getLogger("wheel_bot.morning_digest")
 
 MORNING_DIGEST_KV_KEY = "morning_digest_last_date"
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
+
+
+@dataclass(frozen=True)
+class MorningDigestPost:
+    text: str
+    image_url: Optional[str] = None
+    source_mode: str = "historical"  # news | historical
+    news_title: Optional[str] = None
 
 
 def _msk_now(cfg: MorningDigestConfig) -> datetime:
@@ -33,38 +48,59 @@ def _today_key(cfg: MorningDigestConfig, when: Optional[datetime] = None) -> str
     return dt.date().isoformat()
 
 
-def _build_prompt(cfg: MorningDigestConfig, when: datetime) -> str:
+def _build_prompt(
+    cfg: MorningDigestConfig,
+    when: datetime,
+    *,
+    news_context: str,
+    featured_title: Optional[str],
+    use_news: bool,
+) -> str:
     day = when.strftime("%d.%m.%Y")
     month_day = when.strftime("%d %B")
+    priority = cfg.focus_events or "WSOP, World Series of Poker"
+    if use_news and featured_title:
+        fact_block = (
+            "2) Главный блок — актуальная новость/момент из списка ниже. "
+            f"В первую очередь опирайся на самую релевантную новость (приоритет: {priority}). "
+            f"Основная тема: «{featured_title}». Перескажи живо и понятно по-русски, без копипасты заголовка."
+        )
+    else:
+        fact_block = (
+            "2) Актуальных ярких новостей по приоритетным событиям нет — дай интересный "
+            "исторический покерный факт, привязанный к этой дате. Если точной даты нет — "
+            "дай сильный познавательный факт из истории покера."
+        )
+
     return (
         f"Сегодня {day} ({month_day}) по календарю.\n\n"
-        "Напиши одно утреннее сообщение для покерного Telegram-чата на русском языке.\n"
+        "Напиши одно утреннее сообщение для покерного Telegram-чата на русском языке.\n\n"
         "Структура:\n"
-        "1) Короткое «доброе утро» с 1–2 уместными эмодзи.\n"
-        "2) Один интересный блок про покер на сегодня: либо реальная актуальная новость/событие "
-        "из мира покера, либо исторический факт, привязанный к этой дате. Если точной даты нет — "
-        "дай познавательный покерный факт.\n"
+        "1) Короткое «доброе утро» с уместными эмодзи.\n"
+        f"{fact_block}\n"
         "3) Пожелание удачного дня и крупных заносов в турнирах.\n\n"
         "Требования:\n"
-        "- Дружелюбный живой тон, без канцелярита.\n"
-        "- 5–9 строк, компактно.\n"
-        "- Эмодзи уместно, но без перебора.\n"
-        "- Без markdown-разметки (* _ `), только обычный текст и эмодзи.\n"
-        "- Не выдумывай конкретные суммы выигрышей, если не уверен в факте.\n"
-        "- Не упоминай, что ты ИИ."
+        "- Дружелюбный живой тон.\n"
+        "- 6–10 строк, компактно.\n"
+        "- Эмодзи уместно, для красоты, но без перебора.\n"
+        "- Без markdown (* _ `), только текст и эмодзи.\n"
+        "- Не выдумывай цифры и имена, которых нет в источниках ниже.\n"
+        "- Не упоминай, что ты ИИ.\n\n"
+        f"---\n{news_context}"
     )
 
 
 def _openai_chat_sync(api_key: str, model: str, prompt: str) -> str:
     payload = {
         "model": model,
-        "temperature": 0.85,
+        "temperature": 0.8,
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "Ты автор коротких утренних постов для дружеского покерного чата. "
-                    "Пиши только на русском."
+                    "Ты автор утренних постов для дружеского покерного Telegram-чата. "
+                    "Пиши только на русском. Приоритет — яркие актуальные события мирового покера "
+                    "(серии вроде WSOP, EPT, WPT, Triton и т.п.)."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -91,18 +127,59 @@ def _openai_chat_sync(api_key: str, model: str, prompt: str) -> str:
     return text
 
 
+async def prepare_morning_digest_post(
+    conn: aiosqlite.Connection,
+    settings: Settings,
+    *,
+    when: Optional[datetime] = None,
+) -> MorningDigestPost:
+    cfg = await load_morning_digest_config(conn, settings)
+    if not cfg.api_key:
+        raise RuntimeError("OpenAI API key is not configured")
+
+    dt = when or _msk_now(cfg)
+    news_warnings: list[str] = []
+    news_items = []
+    featured = None
+    try:
+        news_items = await fetch_poker_news(cfg.focus_events)
+        featured = await pick_featured_news(cfg.focus_events)
+    except Exception as exc:
+        news_warnings.append(f"не удалось загрузить RSS: {exc}")
+        log.exception("morning digest: poker news fetch failed")
+
+    use_news = featured is not None
+    news_context = format_news_context(news_items, cfg.focus_events)
+    if news_warnings:
+        news_context = f"{news_context}\n\n(Предупреждение: {'; '.join(news_warnings)})"
+
+    prompt = _build_prompt(
+        cfg,
+        dt,
+        news_context=news_context,
+        featured_title=featured.title if featured else None,
+        use_news=use_news,
+    )
+    text = await asyncio.to_thread(_openai_chat_sync, cfg.api_key, cfg.model, prompt)
+
+    if use_news and featured:
+        return MorningDigestPost(
+            text=text,
+            image_url=featured.image_url,
+            source_mode="news",
+            news_title=featured.title,
+        )
+    return MorningDigestPost(text=text, source_mode="historical")
+
+
 async def generate_morning_digest_text(
     conn: aiosqlite.Connection,
     settings: Settings,
     *,
     when: Optional[datetime] = None,
 ) -> str:
-    cfg = await load_morning_digest_config(conn, settings)
-    if not cfg.api_key:
-        raise RuntimeError("OpenAI API key is not configured")
-    dt = when or _msk_now(cfg)
-    prompt = _build_prompt(cfg, dt)
-    return await asyncio.to_thread(_openai_chat_sync, cfg.api_key, cfg.model, prompt)
+    post = await prepare_morning_digest_post(conn, settings, when=when)
+    return post.text
 
 
 async def _already_sent_today(conn: aiosqlite.Connection, today: str) -> bool:
@@ -120,6 +197,39 @@ def _in_send_window(cfg: MorningDigestConfig, now: datetime) -> bool:
     if now.hour > cfg.hour:
         return False
     return True
+
+
+async def _notify_digest_error(
+    bot: Bot,
+    settings: Settings,
+    title: str,
+    details: str,
+) -> None:
+    text = (
+        f"⚠️ *Утренний дайджест — ошибка*\n\n"
+        f"*{title}*\n\n"
+        f"{details}\n\n"
+        f"Проверьте вкладку «Админ» → «Утренний дайджест» или логи `wheel-bot`."
+    )
+    await notify_superadmins(bot, settings, text, log=log, parse_mode="Markdown")
+
+
+async def _send_post_to_chat(bot: Bot, chat_id: int, post: MorningDigestPost) -> tuple[bool, Optional[str]]:
+    """Отправка в чат. Возвращает (успех, предупреждение о фото)."""
+    image_warning: Optional[str] = None
+    if post.image_url:
+        try:
+            await bot.send_photo(chat_id, photo=post.image_url, caption=post.text)
+            return True, None
+        except (TelegramBadRequest, TelegramForbiddenError) as exc:
+            image_warning = f"фото не отправилось ({exc}), отправлен только текст"
+            log.warning("morning digest: photo send failed, fallback to text: %s", exc)
+        except Exception as exc:
+            image_warning = f"фото не отправилось ({exc}), отправлен только текст"
+            log.exception("morning digest: photo send failed")
+
+    await bot.send_message(chat_id, post.text)
+    return True, image_warning
 
 
 async def send_morning_digest(
@@ -147,27 +257,52 @@ async def send_morning_digest(
             return False
 
     try:
-        text = await generate_morning_digest_text(conn, settings, when=now)
-    except Exception:
-        log.exception("morning digest: OpenAI generation failed")
+        async with db_lock:
+            post = await prepare_morning_digest_post(conn, settings, when=now)
+    except Exception as exc:
+        log.exception("morning digest: generation failed")
+        await _notify_digest_error(
+            bot,
+            settings,
+            "Не удалось сгенерировать пост",
+            str(exc),
+        )
         return False
 
     chat_id = int(cfg.target_chat_id)
     try:
-        await bot.send_message(chat_id, text)
-    except TelegramForbiddenError:
+        ok, image_warning = await _send_post_to_chat(bot, chat_id, post)
+        if not ok:
+            return False
+        if image_warning:
+            await notify_superadmins(
+                bot,
+                settings,
+                f"ℹ️ Утренний дайджест отправлен в чат, но:\n{image_warning}",
+                log=log,
+            )
+    except TelegramForbiddenError as exc:
         log.warning("morning digest: no permission to post in chat %s", chat_id)
+        await _notify_digest_error(bot, settings, "Нет прав писать в чат статистики", str(exc))
         return False
-    except TelegramBadRequest:
+    except TelegramBadRequest as exc:
         log.warning("morning digest: bad request for chat %s", chat_id)
+        await _notify_digest_error(bot, settings, "Telegram отклонил сообщение", str(exc))
         return False
-    except Exception:
+    except Exception as exc:
         log.exception("morning digest: send failed for chat %s", chat_id)
+        await _notify_digest_error(bot, settings, "Ошибка отправки в чат", str(exc))
         return False
 
     async with db_lock:
         await _mark_sent_today(conn, today)
-    log.info("morning digest sent to chat %s for %s", chat_id, today)
+    log.info(
+        "morning digest sent to chat %s for %s (mode=%s, title=%r)",
+        chat_id,
+        today,
+        post.source_mode,
+        post.news_title,
+    )
     return True
 
 
@@ -186,6 +321,12 @@ async def run_morning_digest_scheduler(
                 await send_morning_digest(bot, settings, conn, db_lock)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             log.exception("morning digest scheduler tick failed")
+            await _notify_digest_error(
+                bot,
+                settings,
+                "Сбой планировщика утреннего дайджеста",
+                str(exc),
+            )
         await asyncio.sleep(60)
