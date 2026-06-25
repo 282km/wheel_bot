@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260617a" />
+    <link rel="stylesheet" href="./style.css?v=20260603e" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -67,8 +67,13 @@
           </label>
 
           <div class="prizes-editor" id="prizes-editor">
-            <div class="h">Призы по раундам ($)</div>
-            <div class="prizes-rows" id="prizes-rows"></div>
+            <div class="prizes-editor-label">Призы по раундам ($)</div>
+            <div class="prizes-editor-head muted">
+              <span>Раунд</span>
+              <span>Сумма</span>
+              <span></span>
+            </div>
+            <div class="prizes-rows"></div>
             <button type="button" class="prizes-add-row">+ Добавить раунд</button>
           </div>
           <label>
@@ -111,8 +116,13 @@
           </label>
 
           <div class="prizes-editor" id="prizes-silent-editor">
-            <div class="h">Призы по раундам ($)</div>
-            <div class="prizes-rows" id="prizes-silent-rows"></div>
+            <div class="prizes-editor-label">Призы по раундам ($)</div>
+            <div class="prizes-editor-head muted">
+              <span>Раунд</span>
+              <span>Сумма</span>
+              <span></span>
+            </div>
+            <div class="prizes-rows"></div>
             <button type="button" class="prizes-add-row">+ Добавить раунд</button>
           </div>
 
@@ -223,6 +233,6 @@
       </p>
     </div>
 
-    <script src="./app.js?v=20260617a"></script>
+    <script src="./app.js?v=20260603e"></script>
   </body>
 </html>

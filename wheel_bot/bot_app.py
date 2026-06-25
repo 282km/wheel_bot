@@ -17,8 +17,10 @@ from aiogram.types import (
 )
 
 from wheel_bot import db
+from wheel_bot.bonus_messages import format_bonus_result
+from wheel_bot.bonus_service import try_daily_bonus
 from wheel_bot.config import Settings
-from wheel_bot.stats_service import losers_summary, stats_summary
+from wheel_bot.stats_service import losers_summary, participant_wheel_wins, stats_summary
 
 
 PERIOD_LABELS: dict[str, str] = {
@@ -89,6 +91,17 @@ def _format_stats_block(data: dict[str, Any]) -> str:
     if not data.get("top_win_counts"):
         lines.append("— нет данных")
 
+    top_bonus = data.get("top_bonus_winners") or []
+    if top_bonus:
+        lines.extend(["", "🍀🎁 Бонусы /bonus — кто поймал удачу:"])
+        for i, row in enumerate(top_bonus, start=1):
+            wins = int(row["wins"])
+            lines.append(f"{i} место")
+            lines.append(f"👤 {row['label']}")
+            lines.append(f"🎯 Выигрышей: {wins}")
+            lines.append(f"💰 На сумму: {_fmt_money(float(row['total']))}")
+            lines.append("")
+
     text = "\n".join(lines).strip()
     if len(text) <= 3900:
         return text
@@ -134,6 +147,19 @@ def _format_luz_block(data: dict[str, Any]) -> str:
     return text[:3899] + "…"
 
 
+def _format_winreport_block(data: dict[str, Any]) -> str:
+    lines = [
+        f"🎡 {data['label']}",
+        "",
+        f"📊 Побед в колёсах за всю историю: {int(data['wins'])} из {int(data['total_wheels'])}",
+        f"💵 Выиграно: {_fmt_money(float(data['won_sum']))}",
+    ]
+    if data.get("is_hidden"):
+        lines.append("")
+        lines.append("⚠️ Участник сейчас скрыт в списке.")
+    return "\n".join(lines)
+
+
 def _first_command_token(text: str) -> str:
     return text.strip().split(maxsplit=1)[0].split("@")[0].lower()
 
@@ -150,10 +176,38 @@ def _is_luz_command(message: Message) -> bool:
     return _first_command_token(message.text) == "/luz"
 
 
+def _winreport_nick(message: Message) -> str | None:
+    if not message.text:
+        return None
+    token = _first_command_token(message.text)
+    if token != "/winreport":
+        return None
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return None
+    return parts[1].strip()
+
+
 def _is_chatid_command(message: Message) -> bool:
     if not message.text:
         return False
     return _first_command_token(message.text) == "/chatid"
+
+
+def _is_bonus_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/bonus"
+
+
+def _bonus_user_label(message: Message) -> str:
+    user = message.from_user
+    if not user:
+        return "Участник"
+    if user.username:
+        return f"@{user.username}"
+    name = (user.first_name or "").strip()
+    return name or "Участник"
 
 
 def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
@@ -211,11 +265,12 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 "Вы администратор колеса.\n"
                 "Откройте приложение кнопкой ниже (не по ссылке в браузере).\n"
                 "Статистика — в общем чате: /stat или «Статистика».\n"
-                "Лузеры — /luz.",
+                "Лузеры — /luz.\n"
+                "Бонус удачи — /bonus (раз в сутки в чате статистики).",
                 reply_markup=_admin_webapp_keyboard(settings),
             )
             return
-        await message.answer("В общем чате: /stat или «Статистика», /luz — статистика лузеров.")
+        await message.answer("В общем чате: /stat или «Статистика», /luz — статистика лузеров, /bonus — попытка удачи раз в сутки.")
 
     @router.message(Command("app", "webapp"))
     async def cmd_app(message: Message) -> None:
@@ -262,7 +317,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             chat_id = int(message.chat.id)
             channel_id = cfg["channel_chat_id"]
             post_chat_id = cfg["post_chat_id"]
-            match = "✅ совпадает — /stat и /luz здесь" if chat_id == target_id else "❌ не совпадает — /stat и /luz здесь не сработают"
+            match = "✅ совпадает — /stat, /luz и /bonus здесь" if chat_id == target_id else "❌ не совпадает — /stat, /luz и /bonus здесь не сработают"
             ch_line = f"`{channel_id}`" if channel_id is not None else "не задан"
             text = (
                 f"ID этого чата: `{chat_id}`\n"
@@ -352,9 +407,93 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             except Exception:
                 pass
 
+    async def _handle_bonus(message: Message) -> None:
+        try:
+            if message.chat.type == "channel":
+                await message.answer(
+                    "Команда /bonus работает в группе (супергруппе), не в канале. "
+                    "Вызовите её в чате статистики."
+                )
+                return
+            if message.chat.type == "private":
+                target_id = _configured_stats_chat_id()
+                await message.answer(
+                    "Попытка удачи доступна в общем чате команды, не в личке.\n\n"
+                    f"Напишите /bonus в чате с ID {target_id}.\n\n"
+                    "Если в BotFather включён Group Privacy — используйте "
+                    "/bonus@имя_бота или отключите Privacy Mode."
+                )
+                return
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            target_id = _configured_stats_chat_id()
+            chat_id = int(message.chat.id)
+            log.info("bonus: chat_id=%s user_id=%s", chat_id, user.id)
+            if await _stats_chat_mismatch_reply(message, target_id, "/bonus"):
+                return
+            async with db_lock:
+                result = await try_daily_bonus(conn, int(user.id), user_label=_bonus_user_label(message))
+            text = format_bonus_result(_bonus_user_label(message), result)
+            try:
+                await message.reply(text, parse_mode="Markdown")
+            except TelegramBadRequest:
+                await message.reply(text.replace("*", ""))
+        except TelegramForbiddenError:
+            log.warning("bonus: bot cannot send messages in chat %s", message.chat.id)
+        except Exception:
+            log.exception("bonus handler failed for chat %s", message.chat.id)
+            try:
+                await message.answer("Ошибка при попытке удачи. Проверьте логи wheel-bot на сервере.")
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_bonus_command(message))
+    async def bonus_cmd(message: Message) -> None:
+        await _handle_bonus(message)
+
     @router.message(lambda message: _is_luz_command(message))
     async def luz_cmd(message: Message) -> None:
         await _handle_luz(message)
+
+    @router.message(lambda message: _winreport_nick(message) is not None)
+    async def winreport_cmd(message: Message) -> None:
+        nick_query = _winreport_nick(message)
+        if not nick_query:
+            return
+        try:
+            if message.chat.type == "channel":
+                await message.answer("Команда /winreport работает в группе, не в канале.")
+                return
+            if message.chat.type == "private":
+                await message.answer("Напишите /winreport <ник> в чате статистики.")
+                return
+            target_id = _configured_stats_chat_id()
+            if await _stats_chat_mismatch_reply(message, target_id, "/winreport"):
+                return
+            async with db_lock:
+                data = await participant_wheel_wins(conn, target_id, nick_query)
+            if data is None:
+                await message.answer(f"Участник не найден: {nick_query}")
+                return
+            await message.answer(_format_winreport_block(data))
+        except TelegramForbiddenError:
+            log.warning("winreport: no send permission in chat %s", message.chat.id)
+        except Exception:
+            log.exception("winreport failed for chat %s", message.chat.id)
+            try:
+                await message.answer("Ошибка при формировании отчёта. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
+
+    @router.message(lambda message: _first_command_token(message.text or "") == "/winreport")
+    async def winreport_help(message: Message) -> None:
+        if message.chat.type not in ("group", "supergroup"):
+            return
+        target_id = _configured_stats_chat_id()
+        if int(message.chat.id) != int(target_id):
+            return
+        await message.answer("Использование: /winreport <ник>\nНапример: /winreport Регуляр кэшбеков")
 
     @router.message(lambda message: _is_stat_command(message))
     async def stats_cmd(message: Message) -> None:

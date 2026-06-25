@@ -63,6 +63,23 @@ CREATE TABLE IF NOT EXISTS app_kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS bonus_attempts (
+    telegram_id INTEGER PRIMARY KEY,
+    last_attempt_at TEXT NOT NULL,
+    last_won INTEGER NOT NULL DEFAULT 0,
+    last_amount REAL
+);
+
+CREATE TABLE IF NOT EXISTS bonus_wins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    user_label TEXT NOT NULL DEFAULT '',
+    amount REAL NOT NULL,
+    won_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_bonus_wins_won_at ON bonus_wins(won_at);
 """
 
 

@@ -39,6 +39,7 @@ async def stats_summary(conn: aiosqlite.Connection, chat_id: int, period: Period
     )
     top_win_sum = await _top_win_sum(conn, chat_id, _date_clause_for_alias(params_date, "s"), params_date)
     top_win_cnt = await _top_win_cnt(conn, chat_id, _date_clause_for_alias(params_date, "s"), params_date)
+    top_bonus = await _top_bonus_winners(conn, _date_clause_for_won_at(params_date), params_date)
 
     return {
         "period": period,
@@ -47,6 +48,7 @@ async def stats_summary(conn: aiosqlite.Connection, chat_id: int, period: Period
         "top_allocated": top_allocated,
         "top_win_amounts": top_win_sum,
         "top_win_counts": top_win_cnt,
+        "top_bonus_winners": top_bonus,
     }
 
 
@@ -111,6 +113,45 @@ def _date_clause_for_alias(params_date: list[Any], alias: str) -> str:
     if len(params_date) >= 2:
         parts.append(f" AND datetime({alias}.created_at) < datetime(?)")
     return "".join(parts)
+
+
+def _date_clause_for_won_at(params_date: list[Any]) -> str:
+    parts: list[str] = []
+    if len(params_date) >= 1:
+        parts.append(" AND datetime(won_at) >= datetime(?)")
+    if len(params_date) >= 2:
+        parts.append(" AND datetime(won_at) < datetime(?)")
+    return "".join(parts)
+
+
+async def _top_bonus_winners(
+    conn: aiosqlite.Connection,
+    date_clause: str,
+    params_date: list[Any],
+) -> list[dict[str, Any]]:
+    """Кто поймал /bonus за период: только с хотя бы одним выигрышем."""
+    sql = f"""
+    SELECT
+        telegram_id,
+        COALESCE(NULLIF(MAX(user_label), ''), 'Участник') AS label,
+        COUNT(*) AS wins,
+        SUM(amount) AS total
+    FROM bonus_wins
+    WHERE 1=1{date_clause}
+    GROUP BY telegram_id
+    HAVING wins > 0
+    ORDER BY wins DESC, total DESC, label COLLATE NOCASE ASC
+    """
+    cur = await conn.execute(sql, params_date)
+    rows = await cur.fetchall()
+    return [
+        {
+            "label": str(r["label"]),
+            "wins": int(r["wins"]),
+            "total": float(r["total"]),
+        }
+        for r in rows
+    ]
 
 
 async def _total_prizes_sum(conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]) -> float:
@@ -188,4 +229,59 @@ async def losers_summary(conn: aiosqlite.Connection, chat_id: int) -> dict[str, 
         "prizes_sum": prizes_sum,
         "worst_wins": worst_wins,
         "worst_money": worst_money,
+    }
+
+
+async def participant_wheel_wins(conn: aiosqlite.Connection, chat_id: int, nick_query: str) -> dict[str, Any] | None:
+    """Победы участника в колёсах за всю историю (по poker_nick, фрагмент)."""
+    row = await (
+        await conn.execute(
+            """
+            SELECT id, poker_nick, description, is_hidden
+            FROM participants
+            WHERE poker_nick LIKE ? COLLATE NOCASE
+            ORDER BY poker_nick COLLATE NOCASE ASC
+            LIMIT 1
+            """,
+            (f"%{nick_query.strip()}%",),
+        )
+    ).fetchone()
+    if not row:
+        return None
+
+    pid = int(row["id"])
+    wins_row = await (
+        await conn.execute(
+            """
+            SELECT COUNT(DISTINCT s.id) AS wins
+            FROM wheel_spins w
+            JOIN wheel_sessions s ON s.id = w.session_id
+            WHERE w.winner_id = ? AND s.chat_id = ?
+            """,
+            (pid, chat_id),
+        )
+    ).fetchone()
+    money_row = await (
+        await conn.execute(
+            """
+            SELECT COALESCE(SUM(w.prize_amount), 0) AS s
+            FROM wheel_spins w
+            JOIN wheel_sessions s ON s.id = w.session_id
+            WHERE w.winner_id = ? AND s.chat_id = ?
+            """,
+            (pid, chat_id),
+        )
+    ).fetchone()
+    total_wheels = await _total_wheels_count(conn, chat_id)
+
+    nick = str(row["poker_nick"])
+    desc = str(row["description"] or "").strip()
+    return {
+        "id": pid,
+        "nick": nick,
+        "label": _label(nick, desc),
+        "is_hidden": bool(int(row["is_hidden"])),
+        "wins": int(wins_row["wins"]) if wins_row else 0,
+        "total_wheels": total_wheels,
+        "won_sum": float(money_row["s"]) if money_row else 0.0,
     }
