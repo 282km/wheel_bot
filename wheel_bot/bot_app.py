@@ -294,14 +294,19 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         if role != "superadmin":
             await message.answer("Команда только для superadmin.")
             return
-        if not settings.openai_api_key:
-            await message.answer("OPENAI_API_KEY не задан в .env на сервере.")
+        from wheel_bot.morning_digest_settings import load_morning_digest_config
+
+        async with db_lock:
+            cfg = await load_morning_digest_config(conn, settings)
+        if not cfg.api_key:
+            await message.answer("API ключ не задан. Укажите во вкладке «Админ» в WebApp.")
             return
         await message.answer("Генерирую утренний пост…")
         try:
             from wheel_bot.morning_digest import generate_morning_digest_text
 
-            text = await generate_morning_digest_text(settings)
+            async with db_lock:
+                text = await generate_morning_digest_text(conn, settings)
             await message.answer(f"Превью (в чат не отправлено):\n\n{text}")
         except Exception as exc:
             log.exception("morning_test failed")
@@ -318,8 +323,12 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         if role != "superadmin":
             await message.answer("Команда только для superadmin.")
             return
-        if not settings.openai_api_key:
-            await message.answer("OPENAI_API_KEY не задан в .env на сервере.")
+        from wheel_bot.morning_digest_settings import load_morning_digest_config
+
+        async with db_lock:
+            cfg = await load_morning_digest_config(conn, settings)
+        if not cfg.api_key:
+            await message.answer("API ключ не задан. Укажите во вкладке «Админ» в WebApp.")
             return
         try:
             from wheel_bot.morning_digest import send_morning_digest

@@ -1171,6 +1171,9 @@ function setTab(name) {
   if (name === "templates") {
     reloadTemplates().catch((e) => tgAlert(String(e && e.message ? e.message : e)));
   }
+  if (name === "admins") {
+    loadMorningDigestSettings().catch((e) => tgAlert(String(e && e.message ? e.message : e)));
+  }
   if (name === "wheel_silent") {
     requestAnimationFrame(() => paintSilentWheel(silentCurrentSegments));
     updateSilentWheelControls();
@@ -1244,6 +1247,82 @@ function bindWheelPostSettings() {
   }
   bindAdminTestButton($("#admin-test-chat"), "/api/admin/test-chat", "чат");
   bindAdminTestButton($("#admin-test-channel"), "/api/admin/test-channel", "канал");
+}
+
+function updateMorningDigestUi(data) {
+  const enabled = $("#morning-digest-enabled");
+  const model = $("#morning-openai-model");
+  const hour = $("#morning-digest-hour");
+  const status = $("#morning-openai-key-status");
+  const clearCb = $("#morning-clear-api-key");
+  if (enabled) enabled.checked = !!data.enabled;
+  if (model) model.value = data.model || "gpt-4o-mini";
+  if (hour) hour.value = String(data.hour ?? 8);
+  if (clearCb) clearCb.checked = false;
+  const keyInput = $("#morning-openai-key");
+  if (keyInput) keyInput.value = "";
+  if (status) {
+    if (data.api_key_configured) {
+      const src = data.api_key_source === "env" ? "из .env" : "в WebApp";
+      status.textContent = `Ключ задан (${src}): ${data.api_key_mask || "••••"}`;
+    } else {
+      status.textContent = "Ключ не задан — утренний дайджест не будет работать.";
+    }
+  }
+}
+
+async function loadMorningDigestSettings() {
+  const data = await api("/api/admin/morning-digest");
+  updateMorningDigestUi(data);
+  return data;
+}
+
+function bindMorningDigestSettings() {
+  const form = $("#morning-digest-form");
+  const testBtn = $("#morning-digest-test");
+  if (form && form.dataset.bound !== "1") {
+    form.dataset.bound = "1";
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const submitBtn = form.querySelector('button[type="submit"]');
+      const body = {
+        enabled: !!$("#morning-digest-enabled")?.checked,
+        model: String($("#morning-openai-model")?.value || "").trim(),
+        hour: Number($("#morning-digest-hour")?.value || 8),
+        clear_api_key: !!$("#morning-clear-api-key")?.checked,
+      };
+      const key = String($("#morning-openai-key")?.value || "").trim();
+      if (key) body.openai_api_key = key;
+      try {
+        await withButtonFeedback(submitBtn, async () => {
+          const data = await api("/api/admin/morning-digest", {
+            method: "PUT",
+            body: JSON.stringify(body),
+          });
+          updateMorningDigestUi(data);
+          tgAlert("Настройки утреннего дайджеста сохранены.");
+        });
+      } catch (err) {
+        tgAlert(String(err && err.message ? err.message : err));
+      }
+    });
+  }
+  if (testBtn && testBtn.dataset.bound !== "1") {
+    testBtn.dataset.bound = "1";
+    testBtn.addEventListener("click", async () => {
+      const preview = $("#morning-digest-preview");
+      if (preview) preview.textContent = "Генерирую…";
+      try {
+        await withButtonFeedback(testBtn, async () => {
+          const res = await api("/api/admin/morning-digest/test", { method: "POST" });
+          if (preview) preview.textContent = res.text || "";
+        });
+      } catch (err) {
+        if (preview) preview.textContent = "";
+        tgAlert(String(err && err.message ? err.message : err));
+      }
+    });
+  }
 }
 
 function homeFullscreenBlockHtml() {
@@ -1834,6 +1913,7 @@ async function boot() {
   }
 
   bindWheelPostSettings();
+  bindMorningDigestSettings();
   try {
     await loadWheelPostSettings();
   } catch (err) {
@@ -1906,6 +1986,11 @@ async function boot() {
   updateSilentSessionStatus();
   ensureAddFormReady();
   if (me.role === "superadmin") {
+    try {
+      await loadMorningDigestSettings();
+    } catch {
+      /* ignore */
+    }
     try {
       await reloadAdmins();
     } catch {

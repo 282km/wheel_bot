@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260603e" />
+    <link rel="stylesheet" href="./style.css?v=20260603f" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -210,6 +210,42 @@
             </p>
           </div>
           <div id="admin-mgmt-block">
+            <div class="card" style="margin-bottom:12px">
+              <div><strong>Утренний дайджест</strong></div>
+              <p class="muted" style="margin:8px 0 10px; font-size:13px">
+                Каждый день в указанное время бот пишет в чат статистики: доброе утро, покерный факт и пожелание удачи.
+              </p>
+              <form id="morning-digest-form" class="list">
+                <label class="row" style="margin:0 0 8px; cursor:pointer">
+                  <input id="morning-digest-enabled" type="checkbox" />
+                  <span>Включить утренний дайджест</span>
+                </label>
+                <label>
+                  OpenAI API ключ
+                  <input id="morning-openai-key" type="password" autocomplete="off" placeholder="sk-... (оставьте пустым — не менять)" />
+                </label>
+                <p id="morning-openai-key-status" class="muted" style="margin:4px 0 8px; font-size:13px"></p>
+                <label class="row" style="margin:0 0 8px; cursor:pointer">
+                  <input id="morning-clear-api-key" type="checkbox" />
+                  <span>Удалить сохранённый ключ</span>
+                </label>
+                <div class="row">
+                  <label style="flex:1">
+                    Модель
+                    <input id="morning-openai-model" type="text" placeholder="gpt-4o-mini" />
+                  </label>
+                  <label style="width:120px">
+                    Час (МСК)
+                    <input id="morning-digest-hour" type="number" min="0" max="23" step="1" />
+                  </label>
+                </div>
+                <div class="row">
+                  <button type="submit">Сохранить дайджест</button>
+                  <button id="morning-digest-test" type="button">Тест генерации</button>
+                </div>
+              </form>
+              <pre id="morning-digest-preview" class="log" style="margin-top:8px"></pre>
+            </div>
             <h3>Управление админами</h3>
             <form id="admin-form" class="row">
               <input name="tid" placeholder="Telegram user id" inputmode="numeric" required />
@@ -233,6 +269,6 @@
       </p>
     </div>
 
-    <script src="./app.js?v=20260603e"></script>
+    <script src="./app.js?v=20260603f"></script>
   </body>
 </html>

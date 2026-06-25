@@ -20,6 +20,12 @@ from starlette.staticfiles import StaticFiles
 
 from wheel_bot import db
 from wheel_bot.config import Settings
+from wheel_bot.morning_digest import generate_morning_digest_text
+from wheel_bot.morning_digest_settings import (
+    load_morning_digest_config,
+    morning_digest_settings_payload,
+    save_morning_digest_settings,
+)
 from wheel_bot.session_token import issue_token, make_session_payload, verify_token
 from wheel_bot.posting import (
     get_stats_chat_id,
@@ -542,6 +548,52 @@ def create_app(
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
+    async def morning_digest_settings_get(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if str(payload.get("role")) != "superadmin":
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            return JSONResponse(await morning_digest_settings_payload(conn, settings))
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    async def morning_digest_settings_put(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if str(payload.get("role")) != "superadmin":
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            body = _json_body(await request.body()) or {}
+            kwargs: dict[str, object] = {}
+            if "enabled" in body:
+                kwargs["enabled"] = bool(body.get("enabled"))
+            if "model" in body:
+                kwargs["model"] = str(body.get("model") or "").strip()
+            if "hour" in body:
+                kwargs["hour"] = int(body.get("hour"))
+            if body.get("clear_api_key"):
+                kwargs["clear_api_key"] = True
+            elif "openai_api_key" in body:
+                key = str(body.get("openai_api_key") or "").strip()
+                if key:
+                    kwargs["openai_api_key"] = key
+            await save_morning_digest_settings(conn, settings, **kwargs)
+            return JSONResponse(await morning_digest_settings_payload(conn, settings))
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    async def morning_digest_test(request: Request) -> Response:
+        try:
+            payload = await _auth(request, settings)
+            if str(payload.get("role")) != "superadmin":
+                return JSONResponse({"error": "forbidden"}, status_code=403)
+            cfg = await load_morning_digest_config(conn, settings)
+            if not cfg.api_key:
+                return JSONResponse({"error": "API ключ не задан"}, status_code=400)
+            text = await generate_morning_digest_text(conn, settings)
+            return JSONResponse({"ok": True, "text": text})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
     async def health(_: Request) -> Response:
         return JSONResponse({"ok": True})
 
@@ -593,6 +645,9 @@ def create_app(
         Route("/api/admins/{id}", admins_delete, methods=["DELETE"]),
         Route("/api/admin/test-chat", admin_test_chat, methods=["POST"]),
         Route("/api/admin/test-channel", admin_test_channel, methods=["POST"]),
+        Route("/api/admin/morning-digest", morning_digest_settings_get, methods=["GET"]),
+        Route("/api/admin/morning-digest", morning_digest_settings_put, methods=["PUT"]),
+        Route("/api/admin/morning-digest/test", morning_digest_test, methods=["POST"]),
         Route(settings.webhook_path, telegram_webhook, methods=["POST"]),
         Mount("/webapp", StaticFiles(directory=str(settings.static_dir / "webapp"), html=True)),
     ]

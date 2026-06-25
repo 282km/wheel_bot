@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import urllib.error
 import urllib.request
-from datetime import date, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 from zoneinfo import ZoneInfo
 
@@ -14,6 +13,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from wheel_bot import db
+from wheel_bot.morning_digest_settings import MorningDigestConfig, load_morning_digest_config
 
 if TYPE_CHECKING:
     from wheel_bot.config import Settings
@@ -24,16 +24,16 @@ MORNING_DIGEST_KV_KEY = "morning_digest_last_date"
 OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
 
 
-def _msk_now(settings: Settings) -> datetime:
-    return datetime.now(ZoneInfo(settings.morning_digest_timezone))
+def _msk_now(cfg: MorningDigestConfig) -> datetime:
+    return datetime.now(ZoneInfo(cfg.timezone))
 
 
-def _today_key(settings: Settings, when: Optional[datetime] = None) -> str:
-    dt = when or _msk_now(settings)
+def _today_key(cfg: MorningDigestConfig, when: Optional[datetime] = None) -> str:
+    dt = when or _msk_now(cfg)
     return dt.date().isoformat()
 
 
-def _build_prompt(settings: Settings, when: datetime) -> str:
+def _build_prompt(cfg: MorningDigestConfig, when: datetime) -> str:
     day = when.strftime("%d.%m.%Y")
     month_day = when.strftime("%d %B")
     return (
@@ -92,23 +92,20 @@ def _openai_chat_sync(api_key: str, model: str, prompt: str) -> str:
 
 
 async def generate_morning_digest_text(
+    conn: aiosqlite.Connection,
     settings: Settings,
     *,
     when: Optional[datetime] = None,
 ) -> str:
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is not configured")
-    dt = when or _msk_now(settings)
-    prompt = _build_prompt(settings, dt)
-    return await asyncio.to_thread(
-        _openai_chat_sync,
-        settings.openai_api_key,
-        settings.openai_model,
-        prompt,
-    )
+    cfg = await load_morning_digest_config(conn, settings)
+    if not cfg.api_key:
+        raise RuntimeError("OpenAI API key is not configured")
+    dt = when or _msk_now(cfg)
+    prompt = _build_prompt(cfg, dt)
+    return await asyncio.to_thread(_openai_chat_sync, cfg.api_key, cfg.model, prompt)
 
 
-async def _already_sent_today(conn: aiosqlite.Connection, settings: Settings, today: str) -> bool:
+async def _already_sent_today(conn: aiosqlite.Connection, today: str) -> bool:
     last = await db.get_kv(conn, MORNING_DIGEST_KV_KEY, "")
     return str(last or "") == today
 
@@ -117,11 +114,10 @@ async def _mark_sent_today(conn: aiosqlite.Connection, today: str) -> None:
     await db.set_kv(conn, MORNING_DIGEST_KV_KEY, today)
 
 
-def _in_send_window(settings: Settings, now: datetime) -> bool:
-    if now.hour < settings.morning_digest_hour:
+def _in_send_window(cfg: MorningDigestConfig, now: datetime) -> bool:
+    if now.hour < cfg.hour:
         return False
-    # Если бот перезапустился после 8:00 — отправим до конца часа, не позже.
-    if now.hour > settings.morning_digest_hour:
+    if now.hour > cfg.hour:
         return False
     return True
 
@@ -136,25 +132,27 @@ async def send_morning_digest(
     when: Optional[datetime] = None,
 ) -> bool:
     """Отправить утренний дайджест в чат статистики. Возвращает True, если отправлено."""
-    if not settings.morning_digest_enabled or not settings.openai_api_key:
+    async with db_lock:
+        cfg = await load_morning_digest_config(conn, settings)
+    if not cfg.enabled or not cfg.api_key:
         return False
 
-    now = when or _msk_now(settings)
-    today = _today_key(settings, now)
-    if not force and not _in_send_window(settings, now):
+    now = when or _msk_now(cfg)
+    today = _today_key(cfg, now)
+    if not force and not _in_send_window(cfg, now):
         return False
 
     async with db_lock:
-        if not force and await _already_sent_today(conn, settings, today):
+        if not force and await _already_sent_today(conn, today):
             return False
 
     try:
-        text = await generate_morning_digest_text(settings, when=now)
+        text = await generate_morning_digest_text(conn, settings, when=now)
     except Exception:
         log.exception("morning digest: OpenAI generation failed")
         return False
 
-    chat_id = int(settings.target_chat_id)
+    chat_id = int(cfg.target_chat_id)
     try:
         await bot.send_message(chat_id, text)
     except TelegramForbiddenError:
@@ -179,18 +177,13 @@ async def run_morning_digest_scheduler(
     conn: aiosqlite.Connection,
     db_lock: asyncio.Lock,
 ) -> None:
-    if not settings.morning_digest_enabled or not settings.openai_api_key:
-        log.info("morning digest scheduler disabled (set OPENAI_API_KEY and MORNING_DIGEST_ENABLED=1)")
-        return
-
-    log.info(
-        "morning digest scheduler started: %02d:00 %s",
-        settings.morning_digest_hour,
-        settings.morning_digest_timezone,
-    )
+    log.info("morning digest scheduler started")
     while True:
         try:
-            await send_morning_digest(bot, settings, conn, db_lock)
+            async with db_lock:
+                cfg = await load_morning_digest_config(conn, settings)
+            if cfg.enabled and cfg.api_key:
+                await send_morning_digest(bot, settings, conn, db_lock)
         except asyncio.CancelledError:
             raise
         except Exception:
