@@ -283,6 +283,62 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             )
         return True
 
+    @router.message(Command("morning_test"))
+    async def morning_test_cmd(message: Message) -> None:
+        """Превью утреннего поста (только superadmin, в личке)."""
+        if message.chat.type != "private":
+            return
+        tg_id = message.from_user.id if message.from_user else 0
+        async with db_lock:
+            role = await db.ensure_user(conn, tg_id)
+        if role != "superadmin":
+            await message.answer("Команда только для superadmin.")
+            return
+        if not settings.openai_api_key:
+            await message.answer("OPENAI_API_KEY не задан в .env на сервере.")
+            return
+        await message.answer("Генерирую утренний пост…")
+        try:
+            from wheel_bot.morning_digest import generate_morning_digest_text
+
+            text = await generate_morning_digest_text(settings)
+            await message.answer(f"Превью (в чат не отправлено):\n\n{text}")
+        except Exception as exc:
+            log.exception("morning_test failed")
+            await message.answer(f"Ошибка генерации: {exc}")
+
+    @router.message(Command("morning_send"))
+    async def morning_send_cmd(message: Message) -> None:
+        """Принудительно отправить утренний пост в чат статистики (superadmin)."""
+        if message.chat.type != "private":
+            return
+        tg_id = message.from_user.id if message.from_user else 0
+        async with db_lock:
+            role = await db.ensure_user(conn, tg_id)
+        if role != "superadmin":
+            await message.answer("Команда только для superadmin.")
+            return
+        if not settings.openai_api_key:
+            await message.answer("OPENAI_API_KEY не задан в .env на сервере.")
+            return
+        try:
+            from wheel_bot.morning_digest import send_morning_digest
+
+            ok = await send_morning_digest(
+                message.bot,
+                settings,
+                conn,
+                db_lock,
+                force=True,
+            )
+            if ok:
+                await message.answer(f"Утренний пост отправлен в чат {settings.target_chat_id}.")
+            else:
+                await message.answer("Не удалось отправить пост. Проверьте логи wheel-bot.")
+        except Exception as exc:
+            log.exception("morning_send failed")
+            await message.answer(f"Ошибка: {exc}")
+
     @router.message(Command("start"))
     async def cmd_start(message: Message) -> None:
         if message.chat.type != "private":

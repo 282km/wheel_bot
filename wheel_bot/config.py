@@ -41,6 +41,11 @@ class Settings:
     ssl_keyfile: Optional[str]
     webhook_path: str
     webhook_secret: str
+    openai_api_key: Optional[str]
+    openai_model: str
+    morning_digest_enabled: bool
+    morning_digest_hour: int
+    morning_digest_timezone: str
 
     @property
     def webapp_url(self) -> str:
@@ -101,6 +106,19 @@ def load_settings() -> Settings:
     if len(webhook_secret) < 8:
         raise RuntimeError("WEBHOOK_SECRET must be at least 8 characters")
 
+    openai_api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
+    openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    morning_digest_enabled = os.getenv("MORNING_DIGEST_ENABLED", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    morning_digest_hour = int(os.getenv("MORNING_DIGEST_HOUR", "8"))
+    if not 0 <= morning_digest_hour <= 23:
+        raise RuntimeError("MORNING_DIGEST_HOUR must be between 0 and 23")
+    morning_digest_timezone = os.getenv("MORNING_DIGEST_TIMEZONE", "Europe/Moscow").strip() or "Europe/Moscow"
+
     return Settings(
         bot_token=token,
         session_secret=session_secret,
@@ -117,4 +135,9 @@ def load_settings() -> Settings:
         ssl_keyfile=ssl_key,
         webhook_path=webhook_path,
         webhook_secret=webhook_secret,
+        openai_api_key=openai_api_key,
+        openai_model=openai_model,
+        morning_digest_enabled=morning_digest_enabled,
+        morning_digest_hour=morning_digest_hour,
+        morning_digest_timezone=morning_digest_timezone,
     )

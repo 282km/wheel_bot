@@ -61,6 +61,7 @@ async def run() -> None:
 
         @asynccontextmanager
         async def app_lifespan(_: Any):
+            digest_task: asyncio.Task[None] | None = None
             try:
                 await bot.set_webhook(
                     url=webhook_url,
@@ -80,7 +81,22 @@ async def run() -> None:
                 log.info("WebApp menu button set: %s", settings.webapp_url)
             except Exception:
                 log.exception("Failed to set WebApp menu button (check BotFather domain)")
+            try:
+                from wheel_bot.morning_digest import run_morning_digest_scheduler
+
+                digest_task = asyncio.create_task(
+                    run_morning_digest_scheduler(bot, settings, conn, db_lock),
+                    name="morning_digest_scheduler",
+                )
+            except Exception:
+                log.exception("Failed to start morning digest scheduler")
             yield
+            if digest_task is not None:
+                digest_task.cancel()
+                try:
+                    await digest_task
+                except asyncio.CancelledError:
+                    pass
             try:
                 await bot.delete_webhook(drop_pending_updates=False)
             except Exception:
