@@ -9,9 +9,9 @@ import aiosqlite
 from wheel_bot.db import utc_now_iso
 
 BONUS_COOLDOWN = timedelta(hours=24)
-BONUS_WIN_ODDS = 1_000
+BONUS_WIN_ODDS = 500
 BONUS_AMOUNT_MIN = 5
-BONUS_AMOUNT_MAX = 20
+BONUS_AMOUNT_MAX = 10
 
 BonusStatus = Literal["cooldown", "lose", "win"]
 
@@ -89,7 +89,7 @@ async def try_daily_bonus(
     *,
     user_label: str = "",
 ) -> dict[str, Any]:
-    """Одна попытка /bonus: не чаще раза в сутки, шанс 1 к 1 000."""
+    """Одна попытка /bonus: не чаще раза в сутки, шанс 1 к 500."""
     last = await get_last_bonus_attempt(conn, telegram_id)
     now = datetime.now(timezone.utc)
     if last is not None:
