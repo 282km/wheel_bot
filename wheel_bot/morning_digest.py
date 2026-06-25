@@ -214,8 +214,12 @@ async def _notify_digest_error(
     await notify_superadmins(bot, settings, text, log=log, parse_mode="Markdown")
 
 
-async def _send_post_to_chat(bot: Bot, chat_id: int, post: MorningDigestPost) -> tuple[bool, Optional[str]]:
-    """Отправка в чат. Возвращает (успех, предупреждение о фото)."""
+async def send_morning_post_to_chat(
+    bot: Bot,
+    chat_id: int,
+    post: MorningDigestPost,
+) -> tuple[bool, Optional[str]]:
+    """Отправка поста как в чат: фото с подписью или текст. Возвращает (успех, предупреждение о фото)."""
     image_warning: Optional[str] = None
     if post.image_url:
         try:
@@ -271,7 +275,7 @@ async def send_morning_digest(
 
     chat_id = int(cfg.target_chat_id)
     try:
-        ok, image_warning = await _send_post_to_chat(bot, chat_id, post)
+        ok, image_warning = await send_morning_post_to_chat(bot, chat_id, post)
         if not ok:
             return False
         if image_warning:

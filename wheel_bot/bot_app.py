@@ -285,7 +285,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
 
     @router.message(Command("morning_test"))
     async def morning_test_cmd(message: Message) -> None:
-        """Превью утреннего поста (только superadmin, в личке)."""
+        """Реальный тест дайджеста в личку superadmin: как уйдёт в чат (с фото если есть)."""
         if message.chat.type != "private":
             return
         tg_id = message.from_user.id if message.from_user else 0
@@ -303,11 +303,29 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             return
         await message.answer("Генерирую утренний пост…")
         try:
-            from wheel_bot.morning_digest import generate_morning_digest_text
+            from wheel_bot.morning_digest import prepare_morning_digest_post, send_morning_post_to_chat
 
             async with db_lock:
-                text = await generate_morning_digest_text(conn, settings)
-            await message.answer(f"Превью (в чат не отправлено):\n\n{text}")
+                post = await prepare_morning_digest_post(conn, settings)
+            ok, image_warning = await send_morning_post_to_chat(
+                message.bot,
+                int(message.chat.id),
+                post,
+            )
+            if not ok:
+                await message.answer("Не удалось отправить тест. Проверьте логи wheel-bot.")
+                return
+            mode = "актуальная новость" if post.source_mode == "news" else "исторический факт"
+            lines = [
+                "🧪 Тест отправлен вам (в чат статистики не ушло).",
+                f"Режим: {mode}",
+            ]
+            if post.news_title:
+                lines.append(f"Тема: {post.news_title}")
+            lines.append("📷 С фото" if post.image_url else "📷 Без фото")
+            await message.answer("\n".join(lines))
+            if image_warning:
+                await message.answer(f"⚠️ {image_warning}")
         except Exception as exc:
             log.exception("morning_test failed")
             await message.answer(f"Ошибка генерации: {exc}")
