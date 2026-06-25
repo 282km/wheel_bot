@@ -16,7 +16,7 @@ KV_OPENAI_MODEL = "cfg_openai_model"
 KV_MORNING_DIGEST_HOUR = "cfg_morning_digest_hour"
 KV_MORNING_FOCUS_EVENTS = "cfg_morning_focus_events"
 
-DEFAULT_FOCUS_EVENTS = "WSOP, World Series of Poker, WSOP 2026"
+DEFAULT_FOCUS_EVENTS = "WSOP, World Series of Poker, WSOP 2026, Мировая серия, Мировой серии"
 
 
 @dataclass(frozen=True)

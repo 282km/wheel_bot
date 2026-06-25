@@ -25,6 +25,8 @@ _OG_IMAGE_RE_ALT = re.compile(
 )
 
 RSS_FEEDS: tuple[tuple[str, str], ...] = (
+    ("GipsyTeam", "https://www.gipsyteam.ru/rss/news.xml"),
+    ("GipsyTeam LIVE", "https://www.gipsyteam.ru/rss/reportages.xml"),
     ("PokerNews", "https://www.pokernews.com/news/rss"),
     ("CardPlayer", "https://www.cardplayer.com/rss/news"),
 )
@@ -84,6 +86,7 @@ def _parse_rss_xml(source: str, xml_text: str) -> list[PokerNewsItem]:
         title = _text(item.find("title"))
         if not title:
             continue
+        title = re.sub(r"^(?:статья|видео|live|интервью|обзор)\s*[:\-—]\s*", "", title, flags=re.IGNORECASE).strip()
         link = ""
         link_el = item.find("link")
         if link_el is not None:

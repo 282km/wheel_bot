@@ -1259,7 +1259,7 @@ function updateMorningDigestUi(data) {
   if (enabled) enabled.checked = !!data.enabled;
   if (model) model.value = data.model || "gpt-4o-mini";
   if (hour) hour.value = String(data.hour ?? 8);
-  if (focus) focus.value = data.focus_events || "WSOP, World Series of Poker, WSOP 2026";
+  if (focus) focus.value = data.focus_events || "WSOP, World Series of Poker, WSOP 2026, Мировая серия";
   if (clearCb) clearCb.checked = false;
   const keyInput = $("#morning-openai-key");
   if (keyInput) keyInput.value = "";
