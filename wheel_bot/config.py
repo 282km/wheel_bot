@@ -46,11 +46,28 @@ class Settings:
     morning_digest_enabled: bool
     morning_digest_hour: int
     morning_digest_timezone: str
+    live_stream_enabled: bool
+    live_stream_path: str
+    live_mediamtx_api: Optional[str]
+    live_hls_url: Optional[str]
+    live_stream_title: str
 
     @property
     def webapp_url(self) -> str:
         base = self.public_base_url.rstrip("/")
         return f"{base}/webapp/"
+
+    @property
+    def live_player_url(self) -> str:
+        base = self.public_base_url.rstrip("/")
+        return f"{base}/live/"
+
+    @property
+    def live_hls_url_effective(self) -> str:
+        if self.live_hls_url:
+            return self.live_hls_url
+        base = self.public_base_url.rstrip("/")
+        return f"{base}/hls/{self.live_stream_path}/index.m3u8"
 
 
 def load_settings() -> Settings:
@@ -119,6 +136,17 @@ def load_settings() -> Settings:
         raise RuntimeError("MORNING_DIGEST_HOUR must be between 0 and 23")
     morning_digest_timezone = os.getenv("MORNING_DIGEST_TIMEZONE", "Europe/Moscow").strip() or "Europe/Moscow"
 
+    live_stream_enabled = os.getenv("LIVE_STREAM_ENABLED", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    live_stream_path = os.getenv("LIVE_STREAM_PATH", "poker").strip() or "poker"
+    live_mediamtx_api = os.getenv("LIVE_MEDIAMTX_API", "").strip() or None
+    live_hls_url = os.getenv("LIVE_HLS_URL", "").strip() or None
+    live_stream_title = os.getenv("LIVE_STREAM_TITLE", "Покерный стол").strip() or "Покерный стол"
+
     return Settings(
         bot_token=token,
         session_secret=session_secret,
@@ -140,4 +168,9 @@ def load_settings() -> Settings:
         morning_digest_enabled=morning_digest_enabled,
         morning_digest_hour=morning_digest_hour,
         morning_digest_timezone=morning_digest_timezone,
+        live_stream_enabled=live_stream_enabled,
+        live_stream_path=live_stream_path,
+        live_mediamtx_api=live_mediamtx_api,
+        live_hls_url=live_hls_url,
+        live_stream_title=live_stream_title,
     )

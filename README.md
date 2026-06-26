@@ -84,8 +84,20 @@ python -m wheel_bot
 - Спин отправляет анимации в чат из `TARGET_CHAT_ID`; состав и суммы берутся из WebApp.
 - Время периодов в статистике — **UTC** (границы месяца/года по UTC).
 
+## Трансляция стола (/live)
+
+OBS на ноутбуке шлёт RTMP на VDS (**MediaMTX**), nginx отдаёт HLS по HTTPS, бот по команде `/live` (в чате статистики или в личке) показывает кнопку «Смотреть стол».
+
+1. На VDS: `sudo bash scripts/install_mediamtx.sh`, фрагмент `deploy/nginx-live.conf.snippet` в nginx, открыть порт **1935/tcp**.
+2. В `.env`: `LIVE_STREAM_ENABLED=1`, `LIVE_MEDIAMTX_API=http://127.0.0.1:9997`, `LIVE_STREAM_PATH=poker`.
+3. OBS: сервер `rtmp://ваш-домен:1935`, ключ потока `poker`, захват окна стола.
+4. `git pull` и `sudo systemctl restart wheel-bot`.
+
+Плеер: `{PUBLIC_BASE_URL}/live/`. Проверка API: `GET /api/live/status`.
+
 ## Структура
 
 - `wheel_bot/` — код бота, API, рендер GIF.
 - `static/webapp/` — статический фронт WebApp (без сборки).
+- `static/live/` — страница просмотра HLS-трансляции.
 - `data/app.db` — SQLite (создаётся автоматически).

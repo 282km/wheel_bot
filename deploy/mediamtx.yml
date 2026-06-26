@@ -1,0 +1,29 @@
+# MediaMTX: приём RTMP от OBS, отдача HLS.
+# Установка: scripts/install_mediamtx.sh
+# Конфиг на сервере: /etc/mediamtx.yml
+
+logLevel: info
+logDestinations: [stdout]
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+rtmp: yes
+rtmpAddress: :1935
+
+hls: yes
+hlsAddress: :8888
+hlsAlwaysRemux: no
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+paths:
+  poker:
+    source: publisher
+    # OBS → Настройки → Трансляция:
+    #   Сервер: rtmp://ВАШ_ДОМЕН:1935
+    #   Ключ потока: poker
+    # Опционально логин/пароль:
+    # publishUser: obs
+    # publishPass: ЗАМЕНИТЕ_НА_СЕКРЕТ

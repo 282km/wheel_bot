@@ -200,6 +200,12 @@ def _is_bonus_command(message: Message) -> bool:
     return _first_command_token(message.text) == "/bonus"
 
 
+def _is_live_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/live"
+
+
 def _bonus_user_label(message: Message) -> str:
     user = message.from_user
     if not user:
@@ -248,6 +254,25 @@ def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
                     web_app=WebAppInfo(url=settings.webapp_url),
                 )
             ]
+        ]
+    )
+
+
+def _live_watch_keyboard(settings: Settings) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="▶ Смотреть стол",
+                    web_app=WebAppInfo(url=settings.live_player_url),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔗 Открыть в браузере",
+                    url=settings.live_player_url,
+                )
+            ],
         ]
     )
 
@@ -400,11 +425,16 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 "Откройте приложение кнопкой ниже (не по ссылке в браузере).\n"
                 "Статистика — в общем чате: /stat или «Статистика».\n"
                 "Лузеры — /luz.\n"
-                "Бонус удачи — /bonus (раз в сутки в чате статистики).",
+                "Бонус удачи — /bonus (раз в сутки в чате статистики).\n"
+                "Трансляция стола — /live (здесь или в чате, когда идёт эфир).",
                 reply_markup=_admin_webapp_keyboard(settings),
             )
             return
-        await message.answer("В общем чате: /stat или «Статистика», /luz — статистика лузеров, /bonus — попытка удачи раз в сутки.")
+        await message.answer(
+            "В общем чате: /stat или «Статистика», /luz — статистика лузеров, "
+            "/bonus — попытка удачи раз в сутки.\n\n"
+            "Здесь в личке: /live — трансляция покерного стола, когда идёт эфир."
+        )
 
     @router.message(Command("app", "webapp"))
     async def cmd_app(message: Message) -> None:
@@ -590,6 +620,46 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 await message.answer("Ошибка при попытке удачи. Проверьте логи wheel-bot на сервере.")
             except Exception:
                 pass
+
+    async def _handle_live(message: Message) -> None:
+        try:
+            if not settings.live_stream_enabled:
+                await message.answer("Трансляция стола пока не настроена на сервере.")
+                return
+            if message.chat.type == "channel":
+                await message.answer("Команда /live — в чате команды или в личке с ботом.")
+                return
+            if message.chat.type in ("group", "supergroup"):
+                target_id = _configured_stats_chat_id()
+                if await _stats_chat_mismatch_reply(message, target_id, "/live"):
+                    return
+            from wheel_bot.live_stream import is_stream_live
+
+            live = await is_stream_live(settings)
+            if not live:
+                await message.answer(
+                    "📺 Сейчас трансляции нет.\n\n"
+                    "Когда стол включат, снова напишите /live — появится кнопка «Смотреть»."
+                )
+                return
+            await message.answer(
+                "📺 Стол в эфире!\n\n"
+                "Нажмите «Смотреть стол» — трансляция откроется в Telegram.\n"
+                "Задержка потока обычно 15–30 секунд.",
+                reply_markup=_live_watch_keyboard(settings),
+            )
+        except TelegramForbiddenError:
+            log.warning("live: bot cannot send messages in chat %s", message.chat.id)
+        except Exception:
+            log.exception("live handler failed for chat %s", message.chat.id)
+            try:
+                await message.answer("Ошибка при проверке трансляции. Проверьте логи wheel-bot на сервере.")
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_live_command(message))
+    async def live_cmd(message: Message) -> None:
+        await _handle_live(message)
 
     @router.message(lambda message: _is_bonus_command(message))
     async def bonus_cmd(message: Message) -> None:

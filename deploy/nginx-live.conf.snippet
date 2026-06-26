@@ -1,0 +1,31 @@
+# Фрагмент для nginx (kolesosychat.fun).
+# Добавьте в server { listen 443 ssl; ... } рядом с прокси на wheel-bot.
+
+# HLS от MediaMTX (локально слушает :8888)
+location /hls/ {
+    proxy_pass http://127.0.0.1:8888/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    add_header Cache-Control no-cache;
+    add_header Access-Control-Allow-Origin *;
+}
+
+# Страница плеера и API бота (если ещё не проксируете весь домен на :8080)
+location /live/ {
+    proxy_pass http://127.0.0.1:8080/live/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location /api/live/ {
+    proxy_pass http://127.0.0.1:8080/api/live/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# RTMP :1935 — открыть в firewall, не через nginx.
+# ufw allow 1935/tcp
