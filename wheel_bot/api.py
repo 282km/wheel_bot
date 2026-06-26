@@ -591,15 +591,38 @@ def create_app(
             cfg = await load_morning_digest_config(conn, settings)
             if not cfg.api_key:
                 return JSONResponse({"error": "API ключ не задан"}, status_code=400)
-            post = await prepare_morning_digest_post(conn, settings)
+            admin_id = int(payload["tg_id"])
+
+            async def _run_test_dm() -> None:
+                try:
+                    from wheel_bot.morning_digest import (
+                        prepare_morning_digest_post,
+                        send_morning_post_to_chat,
+                    )
+
+                    post = await prepare_morning_digest_post(conn, settings)
+                    ok, image_warning = await send_morning_post_to_chat(bot, admin_id, post)
+                    if not ok:
+                        await bot.send_message(admin_id, "Не удалось отправить тест. Проверьте логи.")
+                        return
+                    mode = "актуальная новость" if post.source_mode == "news" else "исторический факт"
+                    extra = [f"🧪 Тест дайджеста (режим: {mode})."]
+                    if post.news_title:
+                        extra.append(f"Тема: {post.news_title}")
+                    extra.append("📷 С фото" if post.image_url else "📷 Без фото")
+                    await bot.send_message(admin_id, "\n".join(extra))
+                    if image_warning:
+                        await bot.send_message(admin_id, f"⚠️ {image_warning}")
+                except Exception:
+                    webhook_log.exception("morning digest test (dm) failed")
+                    try:
+                        await bot.send_message(admin_id, "Ошибка генерации теста. Проверьте логи wheel-bot.")
+                    except Exception:
+                        pass
+
+            asyncio.create_task(_run_test_dm())
             return JSONResponse(
-                {
-                    "ok": True,
-                    "text": post.text,
-                    "image_url": post.image_url,
-                    "source_mode": post.source_mode,
-                    "news_title": post.news_title,
-                }
+                {"ok": True, "delivery": "dm", "message": "Тест запущен — пост придёт вам в личку через ~10–40 сек."}
             )
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)

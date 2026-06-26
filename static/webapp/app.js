@@ -1314,15 +1314,15 @@ function bindMorningDigestSettings() {
     testBtn.dataset.bound = "1";
     testBtn.addEventListener("click", async () => {
       const preview = $("#morning-digest-preview");
-      if (preview) preview.textContent = "Генерирую…";
+      if (preview) preview.textContent = "Запускаю тест…";
       try {
         await withButtonFeedback(testBtn, async () => {
           const res = await api("/api/admin/morning-digest/test", { method: "POST" });
-          const lines = [res.text || ""];
-          if (res.news_title) lines.unshift(`Тема: ${res.news_title}`);
-          if (res.source_mode) lines.unshift(`Режим: ${res.source_mode === "news" ? "актуальная новость" : "исторический факт"}`);
-          if (res.image_url) lines.push(`\nФото: ${res.image_url}`);
-          if (preview) preview.textContent = lines.join("\n");
+          if (preview) {
+            preview.textContent =
+              res.message ||
+              "Тест запущен — пост придёт вам в личку через ~10–40 сек.";
+          }
         });
       } catch (err) {
         if (preview) preview.textContent = "";

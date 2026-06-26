@@ -18,6 +18,8 @@ from wheel_bot import db
 from wheel_bot.morning_digest_settings import MorningDigestConfig, load_morning_digest_config
 from wheel_bot.notify import notify_superadmins
 from wheel_bot.poker_news_service import (
+    _select_featured,
+    attach_image,
     fetch_poker_news,
     format_news_context,
     pick_featured_news,
@@ -146,7 +148,7 @@ def _openai_chat_sync(api_key: str, model: str, prompt: str) -> str:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=90) as resp:
+    with urllib.request.urlopen(req, timeout=45) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     choices = data.get("choices") or []
     if not choices:
@@ -170,11 +172,13 @@ async def prepare_morning_digest_post(
 
     dt = when or _msk_now(cfg)
     news_warnings: list[str] = []
-    news_items = []
+    news_items: list = []
     featured = None
     try:
-        news_items = await fetch_poker_news(cfg.focus_events)
-        featured = await pick_featured_news(cfg.focus_events)
+        news_items = await fetch_poker_news(cfg.focus_events, limit=12)
+        featured = _select_featured(news_items)
+        if featured is not None:
+            featured = await attach_image(featured)
     except Exception as exc:
         news_warnings.append(f"не удалось загрузить RSS: {exc}")
         log.exception("morning digest: poker news fetch failed")

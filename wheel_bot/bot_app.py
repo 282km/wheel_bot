@@ -301,34 +301,44 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         if not cfg.api_key:
             await message.answer("API ключ не задан. Укажите во вкладке «Админ» в WebApp.")
             return
-        await message.answer("Генерирую утренний пост…")
-        try:
-            from wheel_bot.morning_digest import prepare_morning_digest_post, send_morning_post_to_chat
+        await message.answer("Генерирую утренний пост… пришлю через ~10–40 сек.")
 
-            async with db_lock:
-                post = await prepare_morning_digest_post(conn, settings)
-            ok, image_warning = await send_morning_post_to_chat(
-                message.bot,
-                int(message.chat.id),
-                post,
-            )
-            if not ok:
-                await message.answer("Не удалось отправить тест. Проверьте логи wheel-bot.")
-                return
-            mode = "актуальная новость" if post.source_mode == "news" else "исторический факт"
-            lines = [
-                "🧪 Тест отправлен вам (в чат статистики не ушло).",
-                f"Режим: {mode}",
-            ]
-            if post.news_title:
-                lines.append(f"Тема: {post.news_title}")
-            lines.append("📷 С фото" if post.image_url else "📷 Без фото")
-            await message.answer("\n".join(lines))
-            if image_warning:
-                await message.answer(f"⚠️ {image_warning}")
-        except Exception as exc:
-            log.exception("morning_test failed")
-            await message.answer(f"Ошибка генерации: {exc}")
+        async def _run_test() -> None:
+            try:
+                from wheel_bot.morning_digest import (
+                    prepare_morning_digest_post,
+                    send_morning_post_to_chat,
+                )
+
+                async with db_lock:
+                    post = await prepare_morning_digest_post(conn, settings)
+                ok, image_warning = await send_morning_post_to_chat(
+                    message.bot,
+                    int(message.chat.id),
+                    post,
+                )
+                if not ok:
+                    await message.answer("Не удалось отправить тест. Проверьте логи wheel-bot.")
+                    return
+                mode = "актуальная новость" if post.source_mode == "news" else "исторический факт"
+                lines = [
+                    "🧪 Тест отправлен вам (в чат статистики не ушло).",
+                    f"Режим: {mode}",
+                ]
+                if post.news_title:
+                    lines.append(f"Тема: {post.news_title}")
+                lines.append("📷 С фото" if post.image_url else "📷 Без фото")
+                await message.answer("\n".join(lines))
+                if image_warning:
+                    await message.answer(f"⚠️ {image_warning}")
+            except Exception as exc:
+                log.exception("morning_test failed")
+                try:
+                    await message.answer(f"Ошибка генерации: {exc}")
+                except Exception:
+                    pass
+
+        asyncio.create_task(_run_test())
 
     @router.message(Command("morning_send"))
     async def morning_send_cmd(message: Message) -> None:
@@ -348,23 +358,31 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         if not cfg.api_key:
             await message.answer("API ключ не задан. Укажите во вкладке «Админ» в WebApp.")
             return
-        try:
-            from wheel_bot.morning_digest import send_morning_digest
+        await message.answer("Готовлю пост и отправляю в чат… ~10–40 сек.")
 
-            ok = await send_morning_digest(
-                message.bot,
-                settings,
-                conn,
-                db_lock,
-                force=True,
-            )
-            if ok:
-                await message.answer(f"Утренний пост отправлен в чат {settings.target_chat_id}.")
-            else:
-                await message.answer("Не удалось отправить пост. Проверьте логи wheel-bot.")
-        except Exception as exc:
-            log.exception("morning_send failed")
-            await message.answer(f"Ошибка: {exc}")
+        async def _run_send() -> None:
+            try:
+                from wheel_bot.morning_digest import send_morning_digest
+
+                ok = await send_morning_digest(
+                    message.bot,
+                    settings,
+                    conn,
+                    db_lock,
+                    force=True,
+                )
+                if ok:
+                    await message.answer(f"Утренний пост отправлен в чат {settings.target_chat_id}.")
+                else:
+                    await message.answer("Не удалось отправить пост. Проверьте логи wheel-bot.")
+            except Exception as exc:
+                log.exception("morning_send failed")
+                try:
+                    await message.answer(f"Ошибка: {exc}")
+                except Exception:
+                    pass
+
+        asyncio.create_task(_run_send())
 
     @router.message(Command("start"))
     async def cmd_start(message: Message) -> None:

@@ -123,7 +123,7 @@ def _parse_rss_xml(source: str, xml_text: str) -> list[PokerNewsItem]:
     return out
 
 
-def _fetch_url(url: str, timeout: int = 25) -> str:
+def _fetch_url(url: str, timeout: int = 12) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
@@ -134,7 +134,7 @@ def _fetch_og_image_sync(article_url: str) -> Optional[str]:
     if not article_url.startswith("http"):
         return None
     try:
-        html = _fetch_url(article_url, timeout=20)
+        html = _fetch_url(article_url, timeout=10)
     except Exception:
         return None
     for pattern in (_OG_IMAGE_RE, _OG_IMAGE_RE_ALT):
@@ -187,53 +187,68 @@ def _rank_items(items: list[PokerNewsItem], focus_events: str) -> list[PokerNews
     return ranked
 
 
-def _fetch_all_news_sync() -> list[PokerNewsItem]:
-    all_items: list[PokerNewsItem] = []
-    seen_titles: set[str] = set()
-    for source_name, feed_url in RSS_FEEDS:
-        try:
-            xml_text = _fetch_url(feed_url)
-            for item in _parse_rss_xml(source_name, xml_text):
-                key = item.title.lower()
-                if key in seen_titles:
-                    continue
-                seen_titles.add(key)
-                all_items.append(item)
-        except Exception:
-            log.warning("failed to fetch poker RSS: %s", feed_url, exc_info=True)
-    return all_items
+def _fetch_single_feed(source_name: str, feed_url: str) -> list[PokerNewsItem]:
+    try:
+        xml_text = _fetch_url(feed_url)
+        return _parse_rss_xml(source_name, xml_text)
+    except Exception:
+        log.warning("failed to fetch poker RSS: %s", feed_url, exc_info=True)
+        return []
 
 
 async def fetch_poker_news(focus_events: str, *, limit: int = 8) -> list[PokerNewsItem]:
-    items = await asyncio.to_thread(_fetch_all_news_sync)
-    ranked = _rank_items(items, focus_events)
+    # Грузим фиды параллельно, чтобы не упереться в таймаут шлюза.
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_fetch_single_feed, name, url) for name, url in RSS_FEEDS),
+        return_exceptions=True,
+    )
+    all_items: list[PokerNewsItem] = []
+    seen_titles: set[str] = set()
+    for res in results:
+        if isinstance(res, BaseException):
+            continue
+        for item in res:
+            key = item.title.lower()
+            if key in seen_titles:
+                continue
+            seen_titles.add(key)
+            all_items.append(item)
+    ranked = _rank_items(all_items, focus_events)
     return ranked[:limit]
 
 
-async def pick_featured_news(focus_events: str) -> Optional[PokerNewsItem]:
-    items = await fetch_poker_news(focus_events, limit=12)
+def _select_featured(items: list[PokerNewsItem]) -> Optional[PokerNewsItem]:
     if not items:
         return None
     featured = items[0]
     if featured.focus_score <= 0:
-        # Нет новостей по приоритетным событиям — берём самую свежую яркую.
-        featured = max(
-            items,
-            key=lambda x: x.published.timestamp() if x.published else 0,
-        )
-    if not featured.image_url and featured.link:
-        og = await asyncio.to_thread(_fetch_og_image_sync, featured.link)
-        if og:
-            featured = PokerNewsItem(
-                title=featured.title,
-                summary=featured.summary,
-                link=featured.link,
-                image_url=og,
-                source=featured.source,
-                published=featured.published,
-                focus_score=featured.focus_score,
-            )
+        featured = max(items, key=lambda x: x.published.timestamp() if x.published else 0)
     return featured
+
+
+async def attach_image(item: PokerNewsItem) -> PokerNewsItem:
+    if item.image_url or not item.link:
+        return item
+    og = await asyncio.to_thread(_fetch_og_image_sync, item.link)
+    if not og:
+        return item
+    return PokerNewsItem(
+        title=item.title,
+        summary=item.summary,
+        link=item.link,
+        image_url=og,
+        source=item.source,
+        published=item.published,
+        focus_score=item.focus_score,
+    )
+
+
+async def pick_featured_news(focus_events: str) -> Optional[PokerNewsItem]:
+    items = await fetch_poker_news(focus_events, limit=12)
+    featured = _select_featured(items)
+    if featured is None:
+        return None
+    return await attach_image(featured)
 
 
 def format_news_context(items: list[PokerNewsItem], focus_events: str) -> str:
