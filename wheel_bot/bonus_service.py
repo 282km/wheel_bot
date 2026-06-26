@@ -3,15 +3,22 @@ from __future__ import annotations
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 
+from wheel_bot import db
 from wheel_bot.db import utc_now_iso
 
 BONUS_COOLDOWN = timedelta(hours=24)
 BONUS_WIN_ODDS = 500
 BONUS_AMOUNT_MIN = 5
 BONUS_AMOUNT_MAX = 10
+
+# Разовая акция: в день первого запуска первый успешный /bonus выигрывает гарантированно.
+KV_BONUS_GUARANTEED_PROMO_DATE = "bonus_guaranteed_promo_date"
+KV_BONUS_GUARANTEED_PROMO_CONSUMED = "bonus_guaranteed_promo_consumed"
+BONUS_TIMEZONE = "Europe/Moscow"
 
 BonusStatus = Literal["cooldown", "lose", "win"]
 
@@ -67,6 +74,30 @@ def format_bonus_wait(seconds: int) -> str:
     return "меньше минуты"
 
 
+def _bonus_today_key() -> str:
+    return datetime.now(ZoneInfo(BONUS_TIMEZONE)).date().isoformat()
+
+
+async def _consume_guaranteed_promo(conn: aiosqlite.Connection, today: str) -> None:
+    await db.set_kv(conn, KV_BONUS_GUARANTEED_PROMO_DATE, today)
+    await db.set_kv(conn, KV_BONUS_GUARANTEED_PROMO_CONSUMED, "1")
+
+
+async def _take_guaranteed_promo_win(conn: aiosqlite.Connection) -> bool:
+    """Первый /bonus в promo-день выигрывает гарантированно; дальше — обычные шансы."""
+    today = _bonus_today_key()
+    promo_date = (await db.get_kv(conn, KV_BONUS_GUARANTEED_PROMO_DATE, "") or "").strip()
+    consumed = (await db.get_kv(conn, KV_BONUS_GUARANTEED_PROMO_CONSUMED, "") or "").strip()
+
+    if promo_date and promo_date != today:
+        return False
+    if consumed == "1":
+        return False
+
+    await _consume_guaranteed_promo(conn, today)
+    return True
+
+
 async def record_bonus_win(
     conn: aiosqlite.Connection,
     telegram_id: int,
@@ -98,7 +129,9 @@ async def try_daily_bonus(
             wait_seconds = int((BONUS_COOLDOWN - elapsed).total_seconds())
             return {"status": "cooldown", "wait_seconds": wait_seconds}
 
-    won = secrets.randbelow(BONUS_WIN_ODDS) == 0
+    won = await _take_guaranteed_promo_win(conn)
+    if not won:
+        won = secrets.randbelow(BONUS_WIN_ODDS) == 0
     amount: Optional[float] = None
     if won:
         amount = float(secrets.randbelow(BONUS_AMOUNT_MAX - BONUS_AMOUNT_MIN + 1) + BONUS_AMOUNT_MIN)
