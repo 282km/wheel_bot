@@ -39,34 +39,79 @@
     setStatus("В эфире", "live");
   }
 
+  function isFullscreen() {
+    if (tg && typeof tg.isFullscreen === "boolean") {
+      return tg.isFullscreen;
+    }
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  function updateFsBtn() {
+    var on = isFullscreen();
+    fsBtn.textContent = on ? "↙" : "⛶";
+    fsBtn.setAttribute("aria-label", on ? "Уменьшить окно" : "На весь экран");
+    document.body.classList.toggle("fullscreen", on);
+  }
+
+  function exitFullscreen() {
+    if (tg && typeof tg.exitFullscreen === "function") {
+      try {
+        tg.exitFullscreen();
+      } catch (_e) {
+        /* ignore */
+      }
+      updateFsBtn();
+      return;
+    }
+    var doc = document;
+    if (doc.exitFullscreen) {
+      doc.exitFullscreen().catch(function () {});
+    } else if (doc.webkitExitFullscreen) {
+      doc.webkitExitFullscreen();
+    }
+    updateFsBtn();
+  }
+
   function enterFullscreen() {
     if (tg && typeof tg.requestFullscreen === "function") {
       try {
         tg.requestFullscreen();
-        return;
       } catch (_e) {
-        /* fall through */
+        /* ignore */
       }
-    }
-    if (videoEl.webkitEnterFullscreen) {
-      videoEl.webkitEnterFullscreen();
+      updateFsBtn();
       return;
     }
     if (videoEl.requestFullscreen) {
-      videoEl.requestFullscreen().catch(function () {});
+      videoEl.requestFullscreen().then(updateFsBtn).catch(function () {});
       return;
     }
     if (videoEl.webkitRequestFullscreen) {
       videoEl.webkitRequestFullscreen();
+      updateFsBtn();
     }
   }
 
+  function toggleFullscreen() {
+    if (isFullscreen()) {
+      exitFullscreen();
+    } else {
+      enterFullscreen();
+    }
+  }
+
+  if (tg && typeof tg.onEvent === "function") {
+    tg.onEvent("fullscreenChanged", updateFsBtn);
+  }
+  document.addEventListener("fullscreenchange", updateFsBtn);
+  document.addEventListener("webkitfullscreenchange", updateFsBtn);
+
   fsBtn.addEventListener("click", function (event) {
     event.stopPropagation();
-    enterFullscreen();
+    toggleFullscreen();
   });
 
-  videoEl.addEventListener("dblclick", enterFullscreen);
+  videoEl.addEventListener("dblclick", toggleFullscreen);
 
   function attachStream(hlsUrl) {
     if (window.Hls && Hls.isSupported()) {
