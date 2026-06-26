@@ -42,7 +42,6 @@ from wheel_bot.spin_service import (
     send_silent_announce,
     send_silent_results,
 )
-from wheel_bot.live_stream import is_stream_live
 from wheel_bot.tg_validate import validate_webapp_init_data
 
 
@@ -633,23 +632,6 @@ def create_app(
     async def health(_: Request) -> Response:
         return JSONResponse({"ok": True})
 
-    async def live_config(_: Request) -> Response:
-        if not settings.live_stream_enabled:
-            return JSONResponse({"enabled": False})
-        return JSONResponse(
-            {
-                "enabled": True,
-                "hlsUrl": settings.live_hls_url_effective,
-                "title": settings.live_stream_title,
-            }
-        )
-
-    async def live_status(_: Request) -> Response:
-        if not settings.live_stream_enabled:
-            return JSONResponse({"enabled": False, "live": False})
-        live = await is_stream_live(settings)
-        return JSONResponse({"enabled": True, "live": live})
-
     async def telegram_webhook(request: Request) -> Response:
         secret = request.headers.get("x-telegram-bot-api-secret-token", "")
         if secret != settings.webhook_secret:
@@ -673,8 +655,6 @@ def create_app(
 
     routes = [
         Route("/health", health, methods=["GET"]),
-        Route("/api/live/config", live_config, methods=["GET"]),
-        Route("/api/live/status", live_status, methods=["GET"]),
         Route("/api/session", session_route, methods=["POST"]),
         Route("/api/me", me_route, methods=["GET"]),
         Route("/api/participants", participants_list, methods=["GET"]),
@@ -704,7 +684,6 @@ def create_app(
         Route("/api/admin/morning-digest", morning_digest_settings_put, methods=["PUT"]),
         Route("/api/admin/morning-digest/test", morning_digest_test, methods=["POST"]),
         Route(settings.webhook_path, telegram_webhook, methods=["POST"]),
-        Mount("/live", StaticFiles(directory=str(settings.static_dir / "live"), html=True)),
         Mount("/webapp", StaticFiles(directory=str(settings.static_dir / "webapp"), html=True)),
     ]
 

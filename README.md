@@ -84,28 +84,8 @@ python -m wheel_bot
 - Спин отправляет анимации в чат из `TARGET_CHAT_ID`; состав и суммы берутся из WebApp.
 - Время периодов в статистике — **UTC** (границы месяца/года по UTC).
 
-## Трансляция стола (/live)
-
-OBS на ноутбуке шлёт RTMP на VDS (**MediaMTX**), nginx отдаёт HLS по HTTPS, бот по команде `/live` показывает плеер.
-
-1. На VDS: `sudo bash scripts/install_mediamtx.sh`, фрагмент `deploy/nginx-live.conf.snippet` в nginx.
-2. Секреты: `bash scripts/generate_live_secrets.sh` — path и пароль RTMP в `.env` и `/etc/mediamtx.yml`.
-3. OBS: RTMP с логином/паролем, path из `LIVE_STREAM_PATH` (не используйте «poker»).
-4. `git pull` и `sudo systemctl restart wheel-bot`.
-
-Плеер: `{PUBLIC_BASE_URL}/live/`. Проверка: `GET /api/live/status`.
-
-### Безопасность трансляции
-
-- **RTMP:** `publishUser` / `publishPass` в `/etc/mediamtx.yml`; порт **1935** — по возможности только ваш IP.
-- **HLS:** MediaMTX слушает `127.0.0.1:8888`; снаружи только через nginx `/hls/`.
-- **Path:** случайное имя (`table_…`), совпадает в `.env` и MediaMTX.
-- **nginx:** `limit_req_zone` для `/hls/` (см. комментарий в `deploy/nginx-live.conf.snippet`).
-- Публичная ссылка HLS по-прежнему доступна тем, у кого она есть — для закрытого доступа нужны токены (отдельная задача).
-
 ## Структура
 
 - `wheel_bot/` — код бота, API, рендер GIF.
 - `static/webapp/` — статический фронт WebApp (без сборки).
-- `static/live/` — страница просмотра HLS-трансляции.
 - `data/app.db` — SQLite (создаётся автоматически).
