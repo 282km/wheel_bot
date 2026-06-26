@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Трансляция стола</title>
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
@@ -15,13 +15,14 @@
       <p id="status" class="status">Загрузка…</p>
     </header>
     <div class="video-wrap">
-      <video id="video" controls playsinline autoplay muted></video>
+      <video id="video" controls playsinline webkit-playsinline autoplay muted></video>
+      <button id="fs-btn" type="button" class="fs-btn hidden" aria-label="На весь экран">⛶</button>
       <div id="offline" class="offline hidden">
         <p>Сейчас эфира нет.</p>
-        <p class="muted">Обновите страницу, когда стол включат.</p>
+        <p class="muted">Закройте и снова откройте через /live, когда стол включат.</p>
       </div>
     </div>
-    <p class="hint">Задержка эфира обычно 15–30 секунд. Если картинка не идёт — обновите страницу.</p>
+    <p class="hint">Откройте только через кнопку в боте. На весь экран — ⛶ или двойной тап по видео.</p>
   </main>
   <script src="app.js"></script>
 </body>
