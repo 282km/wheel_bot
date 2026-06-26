@@ -1,8 +1,12 @@
-# Фрагмент для nginx (kolesosychat.fun).
-# Добавьте в server { listen 443 ssl; ... } рядом с прокси на wheel-bot.
+# Добавьте в блок http { } в /etc/nginx/nginx.conf (один раз на сервер):
+#
+# limit_req_zone $binary_remote_addr zone=live_hls:10m rate=30r/s;
+#
+# Затем в server { kolesosychat.fun } — фрагмент ниже или из nginx-live.conf.snippet.
 
-# HLS от MediaMTX (локально слушает :8888)
+# HLS от MediaMTX (127.0.0.1:8888)
 location /hls/ {
+    limit_req zone=live_hls burst=60 nodelay;
     proxy_pass http://127.0.0.1:8888/;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -10,7 +14,6 @@ location /hls/ {
     add_header Access-Control-Allow-Origin *;
 }
 
-# Страница плеера и API бота (если ещё не проксируете весь домен на :8080)
 location /live/ {
     proxy_pass http://127.0.0.1:8080/live/;
     proxy_http_version 1.1;
@@ -20,6 +23,7 @@ location /live/ {
 }
 
 location /api/live/ {
+    limit_req zone=live_hls burst=20 nodelay;
     proxy_pass http://127.0.0.1:8080/api/live/;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
@@ -27,5 +31,5 @@ location /api/live/ {
     proxy_set_header X-Forwarded-Proto $scheme;
 }
 
-# RTMP :1935 — открыть в firewall, не через nginx.
-# ufw allow 1935/tcp
+# RTMP :1935 — только для OBS; закройте в firewall для всех, кроме вашего IP.
+# HLS :8888 — не открывать наружу (слушает 127.0.0.1).

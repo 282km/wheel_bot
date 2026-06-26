@@ -1,11 +1,10 @@
 # MediaMTX: приём RTMP от OBS, отдача HLS.
 # Установка: scripts/install_mediamtx.sh
-# Конфиг на сервере: /etc/mediamtx.yml
+# После установки: scripts/generate_live_secrets.sh и правка пароля/path ниже.
 
 logLevel: info
 logDestinations: [stdout]
 
-# Стабильнее при нестабильном upload с ноутбука (OBS)
 readTimeout: 60s
 writeTimeout: 60s
 writeQueueSize: 1024
@@ -17,17 +16,17 @@ rtmp: yes
 rtmpAddress: :1935
 
 hls: yes
-hlsAddress: :8888
+# Только localhost — снаружи HLS через nginx /hls/
+hlsAddress: 127.0.0.1:8888
 hlsAlwaysRemux: yes
 hlsSegmentCount: 10
 hlsSegmentDuration: 2s
 
 paths:
-  poker:
+  # Имя path = LIVE_STREAM_PATH в .env (не «poker» — см. scripts/generate_live_secrets.sh)
+  livestream:
     source: publisher
-    # OBS → Настройки → Трансляция:
-    #   Сервер: rtmp://ВАШ_ДОМЕН:1935
-    #   Ключ потока: poker
-    # Опционально логин/пароль:
-    # publishUser: obs
-    # publishPass: ЗАМЕНИТЕ_НА_СЕКРЕТ
+    publishUser: obs
+    publishPass: REPLACE_WITH_STRONG_PASSWORD
+    # Опционально: только ваш IP (OBS с ноутбука). Обновляйте при смене IP.
+    # publishIPs: ["203.0.113.10/32"]

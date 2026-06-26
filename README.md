@@ -86,14 +86,22 @@ python -m wheel_bot
 
 ## Трансляция стола (/live)
 
-OBS на ноутбуке шлёт RTMP на VDS (**MediaMTX**), nginx отдаёт HLS по HTTPS, бот по команде `/live` (в чате статистики или в личке) показывает кнопку «Смотреть стол».
+OBS на ноутбуке шлёт RTMP на VDS (**MediaMTX**), nginx отдаёт HLS по HTTPS, бот по команде `/live` показывает плеер.
 
-1. На VDS: `sudo bash scripts/install_mediamtx.sh`, фрагмент `deploy/nginx-live.conf.snippet` в nginx, открыть порт **1935/tcp**.
-2. В `.env`: `LIVE_STREAM_ENABLED=1`, `LIVE_MEDIAMTX_API=http://127.0.0.1:9997`, `LIVE_STREAM_PATH=poker`.
-3. OBS: сервер `rtmp://ваш-домен:1935`, ключ потока `poker`, захват окна стола.
+1. На VDS: `sudo bash scripts/install_mediamtx.sh`, фрагмент `deploy/nginx-live.conf.snippet` в nginx.
+2. Секреты: `bash scripts/generate_live_secrets.sh` — path и пароль RTMP в `.env` и `/etc/mediamtx.yml`.
+3. OBS: RTMP с логином/паролем, path из `LIVE_STREAM_PATH` (не используйте «poker»).
 4. `git pull` и `sudo systemctl restart wheel-bot`.
 
-Плеер: `{PUBLIC_BASE_URL}/live/`. Проверка API: `GET /api/live/status`.
+Плеер: `{PUBLIC_BASE_URL}/live/`. Проверка: `GET /api/live/status`.
+
+### Безопасность трансляции
+
+- **RTMP:** `publishUser` / `publishPass` в `/etc/mediamtx.yml`; порт **1935** — по возможности только ваш IP.
+- **HLS:** MediaMTX слушает `127.0.0.1:8888`; снаружи только через nginx `/hls/`.
+- **Path:** случайное имя (`table_…`), совпадает в `.env` и MediaMTX.
+- **nginx:** `limit_req_zone` для `/hls/` (см. комментарий в `deploy/nginx-live.conf.snippet`).
+- Публичная ссылка HLS по-прежнему доступна тем, у кого она есть — для закрытого доступа нужны токены (отдельная задача).
 
 ## Структура
 
