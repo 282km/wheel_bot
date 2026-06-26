@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 import urllib.error
 import urllib.request
@@ -314,13 +315,34 @@ async def fetch_poker_news(*, limit: int = 8) -> list[PokerNewsItem]:
     return digest.items
 
 
-def _select_featured(items: list[PokerNewsItem]) -> Optional[PokerNewsItem]:
+def _select_featured(
+    items: list[PokerNewsItem],
+    *,
+    rng: Optional[random.Random] = None,
+    pool_size: int = 6,
+) -> Optional[PokerNewsItem]:
+    """Случайно выбирает яркую новость из топа, чтобы темы не повторялись.
+
+    Берём top-N релевантных новостей и тянем одну случайно, с весом по очкам.
+    Так каждый запуск даёт разную тему, но из самых актуальных.
+    """
     if not items:
         return None
-    featured = items[0]
-    if featured.focus_score <= 0:
-        featured = max(items, key=lambda x: x.published.timestamp() if x.published else 0)
-    return featured
+    chooser = rng or random
+
+    scored = [it for it in items if it.focus_score > 0]
+    if scored:
+        pool = scored[:pool_size]
+        weights = [max(1, it.focus_score) for it in pool]
+        return chooser.choices(pool, weights=weights, k=1)[0]
+
+    # Нет релевантных по очкам — берём случайную из самых свежих.
+    by_recency = sorted(
+        items,
+        key=lambda x: x.published.timestamp() if x.published else 0,
+        reverse=True,
+    )
+    return chooser.choice(by_recency[:pool_size])
 
 
 async def attach_image(item: PokerNewsItem) -> PokerNewsItem:
