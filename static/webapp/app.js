@@ -1253,13 +1253,11 @@ function updateMorningDigestUi(data) {
   const enabled = $("#morning-digest-enabled");
   const model = $("#morning-openai-model");
   const hour = $("#morning-digest-hour");
-  const focus = $("#morning-focus-events");
   const status = $("#morning-openai-key-status");
   const clearCb = $("#morning-clear-api-key");
   if (enabled) enabled.checked = !!data.enabled;
   if (model) model.value = data.model || "gpt-4o-mini";
   if (hour) hour.value = String(data.hour ?? 8);
-  if (focus) focus.value = data.focus_events || "WSOP, World Series of Poker, WSOP 2026, Мировая серия";
   if (clearCb) clearCb.checked = false;
   const keyInput = $("#morning-openai-key");
   if (keyInput) keyInput.value = "";
@@ -1291,7 +1289,6 @@ function bindMorningDigestSettings() {
         enabled: !!$("#morning-digest-enabled")?.checked,
         model: String($("#morning-openai-model")?.value || "").trim(),
         hour: Number($("#morning-digest-hour")?.value || 8),
-        focus_events: String($("#morning-focus-events")?.value || "").trim(),
         clear_api_key: !!$("#morning-clear-api-key")?.checked,
       };
       const key = String($("#morning-openai-key")?.value || "").trim();

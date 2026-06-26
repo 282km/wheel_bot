@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Управление колесом</title>
-    <link rel="stylesheet" href="./style.css?v=20260626a" />
+    <link rel="stylesheet" href="./style.css?v=20260626b" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
   </head>
   <body>
@@ -214,20 +214,13 @@
               <div><strong>Утренний дайджест</strong></div>
               <p class="muted" style="margin:8px 0 10px; font-size:13px">
                 Каждый день в указанное время бот пишет в чат статистики: доброе утро, актуальную покерную
-                новость (WSOP и др.) или исторический факт, с фото если доступно.
+                новость или исторический факт, с фото если доступно. Темы подбираются автоматически из свежих RSS.
               </p>
               <form id="morning-digest-form" class="list">
                 <label class="row" style="margin:0 0 8px; cursor:pointer">
                   <input id="morning-digest-enabled" type="checkbox" />
                   <span>Включить утренний дайджест</span>
                 </label>
-                <label>
-                  Приоритетные события (через запятую)
-                  <input id="morning-focus-events" type="text" placeholder="WSOP, World Series of Poker, WSOP 2026, Мировая серия" />
-                </label>
-                <p class="muted" style="margin:4px 0 8px; font-size:12px">
-                  Бот ищет свежие новости по этим словам в первую очередь (сейчас, например, WSOP).
-                </p>
                 <label>
                   OpenAI API ключ
                   <input id="morning-openai-key" type="password" autocomplete="off" placeholder="sk-... (оставьте пустым — не менять)" />
@@ -277,6 +270,6 @@
       </p>
     </div>
 
-    <script src="./app.js?v=20260626a"></script>
+    <script src="./app.js?v=20260626b"></script>
   </body>
 </html>

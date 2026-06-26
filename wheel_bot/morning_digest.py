@@ -20,7 +20,7 @@ from wheel_bot.notify import notify_superadmins
 from wheel_bot.poker_news_service import (
     _select_featured,
     attach_image,
-    fetch_poker_news,
+    fetch_poker_news_digest,
     format_news_context,
     pick_featured_news,
 )
@@ -82,19 +82,25 @@ def _build_prompt(
     news_context: str,
     featured_title: Optional[str],
     use_news: bool,
+    hot_topics: list[str],
 ) -> str:
     day = when.strftime("%d.%m.%Y")
     month_day = when.strftime("%d %B")
-    priority = cfg.focus_events or "WSOP, World Series of Poker"
     if use_news and featured_title:
+        topics_hint = ""
+        if hot_topics:
+            topics_hint = (
+                f" Сейчас в ленте особенно заметны: {', '.join(hot_topics)} — "
+                "но бери только то, что реально есть в списке новостей ниже."
+            )
         fact_block = (
-            "2) Главный блок — актуальная новость/момент из списка ниже. "
-            f"В первую очередь опирайся на самую релевантную новость (приоритет: {priority}). "
+            "2) Главный блок — самая актуальная и яркая новость из списка ниже."
+            f"{topics_hint} "
             f"Основная тема: «{featured_title}». Перескажи живо и понятно по-русски, без копипасты заголовка."
         )
     else:
         fact_block = (
-            "2) Актуальных ярких новостей по приоритетным событиям нет — дай интересный "
+            "2) Свежих ярких новостей в ленте мало — дай интересный "
             "исторический покерный факт, привязанный к этой дате. Если точной даты нет — "
             "дай сильный познавательный факт из истории покера."
         )
@@ -130,8 +136,9 @@ def _openai_chat_sync(api_key: str, model: str, prompt: str) -> str:
                 "role": "system",
                 "content": (
                     "Ты автор утренних постов для дружеского покерного Telegram-чата. "
-                    "Пиши только на русском. Приоритет — яркие актуальные события мирового покера "
-                    "(серии вроде WSOP, EPT, WPT, Triton и т.п.). "
+                    "Пиши только на русском. Сам определяй актуальные темы по свежим новостям "
+                    "(WSOP, EPT, WPT, APT, EAPT, Triton и другие серии — что сейчас в ленте). "
+                    "Не зацикливайся на прошедших сериях, если их уже нет в свежих заголовках. "
                     "В приветствии обращайся к чату по-братски (братва, покерная братва, братва по масти и т.п.), "
                     "никогда не пиши «покерные друзья»."
                 ),
@@ -173,9 +180,12 @@ async def prepare_morning_digest_post(
     dt = when or _msk_now(cfg)
     news_warnings: list[str] = []
     news_items: list = []
+    hot_topics: list[str] = []
     featured = None
     try:
-        news_items = await fetch_poker_news(cfg.focus_events, limit=12)
+        digest = await fetch_poker_news_digest(limit=12)
+        news_items = digest.items
+        hot_topics = digest.hot_topics
         featured = _select_featured(news_items)
         if featured is not None:
             featured = await attach_image(featured)
@@ -184,7 +194,7 @@ async def prepare_morning_digest_post(
         log.exception("morning digest: poker news fetch failed")
 
     use_news = featured is not None
-    news_context = format_news_context(news_items, cfg.focus_events)
+    news_context = format_news_context(news_items, hot_topics)
     if news_warnings:
         news_context = f"{news_context}\n\n(Предупреждение: {'; '.join(news_warnings)})"
 
@@ -194,6 +204,7 @@ async def prepare_morning_digest_post(
         news_context=news_context,
         featured_title=featured.title if featured else None,
         use_news=use_news,
+        hot_topics=hot_topics,
     )
     text = await asyncio.to_thread(_openai_chat_sync, cfg.api_key, cfg.model, prompt)
 

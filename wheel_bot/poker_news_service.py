@@ -43,6 +43,49 @@ class PokerNewsItem:
     focus_score: int = 0
 
 
+@dataclass(frozen=True)
+class PokerNewsDigest:
+    items: list[PokerNewsItem]
+    hot_topics: list[str]
+
+
+# Известные серии/ивенты — паттерны для автоопределения актуальных тем из RSS.
+_SERIES_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("WSOP", (r"\bwsop\b", r"world series of poker", r"мировая серия", r"мировой серии")),
+    ("EPT", (r"\bept\b", r"european poker tour", r"европейск\w* тур")),
+    ("WPT", (r"\bwpt\b", r"world poker tour")),
+    ("APT", (r"\bapt\b", r"asian poker tour")),
+    ("EAPT", (r"\beapt\b", r"european asian poker tour")),
+    ("Triton", (r"\btriton\b", r"тритон")),
+    ("WCOOP", (r"\bwcoop\b",)),
+    ("SCOOP", (r"\bscoop\b",)),
+    ("PCA", (r"\bpca\b", r"pokerstars championship")),
+    ("PGT", (r"\bpgt\b", r"pokergo tour")),
+    ("Irish Open", (r"irish open",)),
+    ("partypoker LIVE", (r"partypoker live", r"partypoker\s+live")),
+    ("Poker Masters", (r"poker masters",)),
+    ("Super High Roller", (r"super high roller", r"shr\b", r"суперхайроллер")),
+)
+
+_EVENT_SIGNALS: tuple[str, ...] = (
+    "финальный стол",
+    "final table",
+    "главный ивент",
+    "main event",
+    "победил",
+    "победитель",
+    "wins ",
+    " champion",
+    "чемпион",
+    "bracelet",
+    "браслет",
+    "турнир",
+    "tournament",
+    "занял",
+    "выиграл",
+)
+
+
 def _local_tag(tag: str) -> str:
     return tag.split("}", 1)[-1] if "}" in tag else tag
 
@@ -144,28 +187,78 @@ def _fetch_og_image_sync(article_url: str) -> Optional[str]:
     return None
 
 
-def _focus_keywords(focus_events: str) -> list[str]:
-    parts = re.split(r"[,;\n]+", focus_events or "")
-    keys = [p.strip().lower() for p in parts if p.strip()]
-    return keys or ["wsop", "world series of poker"]
+def _item_haystack(item: PokerNewsItem) -> str:
+    return f"{item.title} {item.summary}".lower()
 
 
-def _score_item(item: PokerNewsItem, keywords: list[str]) -> int:
-    hay = f"{item.title} {item.summary}".lower()
+def _matches_series(hay: str, patterns: tuple[str, ...]) -> bool:
+    return any(re.search(pat, hay, re.IGNORECASE) for pat in patterns)
+
+
+def _recency_weight(published: Optional[datetime], *, now: Optional[datetime] = None) -> float:
+    if published is None:
+        return 0.35
+    ref = now or datetime.now(timezone.utc)
+    age_hours = max(0.0, (ref - published).total_seconds() / 3600.0)
+    if age_hours <= 24:
+        return 1.0
+    if age_hours <= 48:
+        return 0.85
+    if age_hours <= 96:
+        return 0.65
+    if age_hours <= 168:
+        return 0.45
+    return 0.25
+
+
+def _detect_hot_topics(items: list[PokerNewsItem], *, max_topics: int = 5) -> list[str]:
+    """Определяет актуальные серии/ивенты по свежим заголовкам RSS."""
+    now = datetime.now(timezone.utc)
+    counts: dict[str, float] = {}
+    for item in items:
+        hay = _item_haystack(item)
+        weight = _recency_weight(item.published, now=now)
+        for name, patterns in _SERIES_PATTERNS:
+            if _matches_series(hay, patterns):
+                counts[name] = counts.get(name, 0.0) + weight
+    ranked = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    return [name for name, score in ranked[:max_topics] if score >= 0.45]
+
+
+def _score_item_auto(item: PokerNewsItem, hot_topics: list[str], *, now: Optional[datetime] = None) -> int:
+    hay = _item_haystack(item)
     score = 0
-    for kw in keywords:
-        if kw and kw in hay:
-            score += 10 if len(kw) >= 4 else 5
-    if score:
-        score += 3
+
+    ref = now or datetime.now(timezone.utc)
+    if item.published:
+        age_hours = max(0.0, (ref - item.published).total_seconds() / 3600.0)
+        if age_hours <= 24:
+            score += 30
+        elif age_hours <= 48:
+            score += 22
+        elif age_hours <= 96:
+            score += 12
+        elif age_hours <= 168:
+            score += 6
+
+    series_by_name = {name: patterns for name, patterns in _SERIES_PATTERNS}
+    for topic in hot_topics:
+        patterns = series_by_name.get(topic)
+        if patterns and _matches_series(hay, patterns):
+            score += 18
+
+    if any(sig in hay for sig in _EVENT_SIGNALS):
+        score += 8
+
     return score
 
 
-def _rank_items(items: list[PokerNewsItem], focus_events: str) -> list[PokerNewsItem]:
-    keywords = _focus_keywords(focus_events)
+def _rank_items_auto(items: list[PokerNewsItem]) -> tuple[list[PokerNewsItem], list[str]]:
+    hot_topics = _detect_hot_topics(items)
+    now = datetime.now(timezone.utc)
     ranked: list[PokerNewsItem] = []
     for item in items:
-        score = _score_item(item, keywords)
+        score = _score_item_auto(item, hot_topics, now=now)
         ranked.append(
             PokerNewsItem(
                 title=item.title,
@@ -184,7 +277,7 @@ def _rank_items(items: list[PokerNewsItem], focus_events: str) -> list[PokerNews
         ),
         reverse=True,
     )
-    return ranked
+    return ranked, hot_topics
 
 
 def _fetch_single_feed(source_name: str, feed_url: str) -> list[PokerNewsItem]:
@@ -196,7 +289,7 @@ def _fetch_single_feed(source_name: str, feed_url: str) -> list[PokerNewsItem]:
         return []
 
 
-async def fetch_poker_news(focus_events: str, *, limit: int = 8) -> list[PokerNewsItem]:
+async def fetch_poker_news_digest(*, limit: int = 8) -> PokerNewsDigest:
     # Грузим фиды параллельно, чтобы не упереться в таймаут шлюза.
     results = await asyncio.gather(
         *(asyncio.to_thread(_fetch_single_feed, name, url) for name, url in RSS_FEEDS),
@@ -213,8 +306,13 @@ async def fetch_poker_news(focus_events: str, *, limit: int = 8) -> list[PokerNe
                 continue
             seen_titles.add(key)
             all_items.append(item)
-    ranked = _rank_items(all_items, focus_events)
-    return ranked[:limit]
+    ranked, hot_topics = _rank_items_auto(all_items)
+    return PokerNewsDigest(items=ranked[:limit], hot_topics=hot_topics)
+
+
+async def fetch_poker_news(*, limit: int = 8) -> list[PokerNewsItem]:
+    digest = await fetch_poker_news_digest(limit=limit)
+    return digest.items
 
 
 def _select_featured(items: list[PokerNewsItem]) -> Optional[PokerNewsItem]:
@@ -243,18 +341,28 @@ async def attach_image(item: PokerNewsItem) -> PokerNewsItem:
     )
 
 
-async def pick_featured_news(focus_events: str) -> Optional[PokerNewsItem]:
-    items = await fetch_poker_news(focus_events, limit=12)
-    featured = _select_featured(items)
+async def pick_featured_news() -> Optional[PokerNewsItem]:
+    digest = await fetch_poker_news_digest(limit=12)
+    featured = _select_featured(digest.items)
     if featured is None:
         return None
     return await attach_image(featured)
 
 
-def format_news_context(items: list[PokerNewsItem], focus_events: str) -> str:
+def format_news_context(items: list[PokerNewsItem], hot_topics: list[str]) -> str:
     if not items:
         return "Свежих заголовков из RSS не получено."
-    lines = [f"Приоритетные события: {focus_events or 'WSOP, World Series of Poker'}", ""]
+    if hot_topics:
+        lines = [
+            f"Сейчас в покерной ленте особенно актуальны: {', '.join(hot_topics)}.",
+            "Выбери самую свежую и яркую тему из списка — не зацикливайся на прошедших сериях.",
+            "",
+        ]
+    else:
+        lines = [
+            "Ярких серий в свежих заголовках не выделено — выбери самую интересную актуальную новость.",
+            "",
+        ]
     for i, item in enumerate(items[:6], start=1):
         when = ""
         if item.published:

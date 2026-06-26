@@ -14,9 +14,6 @@ KV_OPENAI_API_KEY = "cfg_openai_api_key"
 KV_MORNING_DIGEST_ENABLED = "cfg_morning_digest_enabled"
 KV_OPENAI_MODEL = "cfg_openai_model"
 KV_MORNING_DIGEST_HOUR = "cfg_morning_digest_hour"
-KV_MORNING_FOCUS_EVENTS = "cfg_morning_focus_events"
-
-DEFAULT_FOCUS_EVENTS = "WSOP, World Series of Poker, WSOP 2026, Мировая серия, Мировой серии"
 
 
 @dataclass(frozen=True)
@@ -27,7 +24,6 @@ class MorningDigestConfig:
     hour: int
     timezone: str
     target_chat_id: int
-    focus_events: str
     source: str  # env | db | none
 
 
@@ -63,7 +59,6 @@ async def load_morning_digest_config(conn: aiosqlite.Connection, settings: Setti
     model = (await db.get_kv(conn, KV_OPENAI_MODEL, "") or "").strip() or settings.openai_model
     hour_raw = (await db.get_kv(conn, KV_MORNING_DIGEST_HOUR, "") or "").strip()
     hour = int(hour_raw) if hour_raw.isdigit() else settings.morning_digest_hour
-    focus_events = (await db.get_kv(conn, KV_MORNING_FOCUS_EVENTS, "") or "").strip() or DEFAULT_FOCUS_EVENTS
 
     return MorningDigestConfig(
         api_key=api_key or None,
@@ -72,7 +67,6 @@ async def load_morning_digest_config(conn: aiosqlite.Connection, settings: Setti
         hour=hour,
         timezone=settings.morning_digest_timezone,
         target_chat_id=int(settings.target_chat_id),
-        focus_events=focus_events,
         source=source,
     )
 
@@ -86,7 +80,6 @@ async def save_morning_digest_settings(
     enabled: Optional[bool] = None,
     model: Optional[str] = None,
     hour: Optional[int] = None,
-    focus_events: Optional[str] = None,
 ) -> MorningDigestConfig:
     if clear_api_key:
         await db.set_kv(conn, KV_OPENAI_API_KEY, "")
@@ -108,10 +101,6 @@ async def save_morning_digest_settings(
             raise ValueError("hour must be between 0 and 23")
         await db.set_kv(conn, KV_MORNING_DIGEST_HOUR, str(h))
 
-    if focus_events is not None:
-        val = str(focus_events).strip() or DEFAULT_FOCUS_EVENTS
-        await db.set_kv(conn, KV_MORNING_FOCUS_EVENTS, val)
-
     return await load_morning_digest_config(conn, settings)
 
 
@@ -125,6 +114,5 @@ async def morning_digest_settings_payload(conn: aiosqlite.Connection, settings: 
         "api_key_configured": bool(cfg.api_key),
         "api_key_mask": mask_api_key(cfg.api_key),
         "api_key_source": cfg.source,
-        "focus_events": cfg.focus_events,
         "ready": bool(cfg.enabled and cfg.api_key),
     }
