@@ -81,10 +81,13 @@
   function attachStream(hlsUrl) {
     if (window.Hls && Hls.isSupported()) {
       const hls = new Hls({
-        lowLatencyMode: true,
-        liveSyncDurationCount: 2,
-        liveMaxLatencyDurationCount: 6,
-        backBufferLength: 30,
+        lowLatencyMode: false,
+        liveSyncDurationCount: 4,
+        liveMaxLatencyDurationCount: 12,
+        maxBufferLength: 40,
+        backBufferLength: 60,
+        maxLiveSyncPlaybackRate: 1,
+        maxBufferHole: 0.5,
       });
       hls.loadSource(hlsUrl);
       hls.attachMedia(videoEl);

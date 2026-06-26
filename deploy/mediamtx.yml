@@ -5,6 +5,11 @@
 logLevel: info
 logDestinations: [stdout]
 
+# Стабильнее при нестабильном upload с ноутбука (OBS)
+readTimeout: 60s
+writeTimeout: 60s
+writeQueueSize: 1024
+
 api: yes
 apiAddress: 127.0.0.1:9997
 
@@ -13,10 +18,9 @@ rtmpAddress: :1935
 
 hls: yes
 hlsAddress: :8888
-hlsAlwaysRemux: no
-hlsSegmentCount: 7
-hlsSegmentDuration: 1s
-hlsPartDuration: 200ms
+hlsAlwaysRemux: yes
+hlsSegmentCount: 10
+hlsSegmentDuration: 2s
 
 paths:
   poker:
