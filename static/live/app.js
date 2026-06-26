@@ -10,21 +10,11 @@
     document.body.classList.add("webapp");
     tg.ready();
     tg.expand();
-    if (typeof tg.disableVerticalSwipes === "function") {
-      tg.disableVerticalSwipes();
-    }
     if (typeof tg.setHeaderColor === "function") {
       tg.setHeaderColor("#0f1419");
     }
     if (typeof tg.setBackgroundColor === "function") {
       tg.setBackgroundColor("#0f1419");
-    }
-    if (typeof tg.isVersionAtLeast === "function" && tg.isVersionAtLeast("8.0")) {
-      try {
-        tg.requestFullscreen();
-      } catch (_e) {
-        /* older clients */
-      }
     }
   }
 
