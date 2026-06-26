@@ -267,6 +267,12 @@ def _live_watch_keyboard(settings: Settings) -> InlineKeyboardMarkup:
                     web_app=WebAppInfo(url=settings.live_player_url),
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="🔗 Открыть в браузере",
+                    url=settings.live_player_url,
+                )
+            ],
         ]
     )
 
