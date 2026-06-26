@@ -258,23 +258,26 @@ def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
     )
 
 
-def _live_watch_keyboard(settings: Settings) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def _live_watch_keyboard(settings: Settings, *, for_channel: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if not for_channel:
+        rows.append(
             [
                 InlineKeyboardButton(
                     text="▶ Смотреть стол",
                     web_app=WebAppInfo(url=settings.live_player_url),
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="🔗 Открыть в браузере",
-                    url=settings.live_player_url,
-                )
-            ],
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="🔗 Открыть в браузере",
+                url=settings.live_player_url,
+            )
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asyncio.Lock) -> Router:
@@ -626,13 +629,23 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             if not settings.live_stream_enabled:
                 await message.answer("Трансляция стола пока не настроена на сервере.")
                 return
-            if message.chat.type == "channel":
-                await message.answer("Команда /live — в чате команды или в личке с ботом.")
-                return
-            if message.chat.type in ("group", "supergroup"):
+
+            chat_type = message.chat.type
+            for_channel = chat_type == "channel"
+
+            if chat_type in ("group", "supergroup"):
                 target_id = _configured_stats_chat_id()
                 if await _stats_chat_mismatch_reply(message, target_id, "/live"):
                     return
+            elif chat_type == "channel":
+                allowed = {int(settings.wheel_channel_id)} if settings.wheel_channel_id else set()
+                if allowed and int(message.chat.id) not in allowed:
+                    await message.answer("Команда /live недоступна в этом канале.")
+                    return
+            elif chat_type != "private":
+                await message.answer("Команда /live — в чате, канале или в личке с ботом.")
+                return
+
             from wheel_bot.live_stream import is_stream_live
 
             live = await is_stream_live(settings)
@@ -642,12 +655,28 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     "Когда стол включат, снова напишите /live — появится кнопка «Смотреть»."
                 )
                 return
-            await message.answer(
-                "📺 Стол в эфире!\n\n"
-                "Нажмите «Смотреть стол» — трансляция откроется в Telegram.\n"
-                "Задержка потока обычно 15–30 секунд.",
-                reply_markup=_live_watch_keyboard(settings),
-            )
+
+            if for_channel:
+                text = (
+                    "📺 Стол в эфире!\n\n"
+                    "В канале смотрите по ссылке в браузере (кнопка ниже).\n"
+                    "WebApp — в личке с ботом или в чате команды: /live"
+                )
+            else:
+                text = (
+                    "📺 Стол в эфире!\n\n"
+                    "Нажмите «Смотреть стол» — трансляция откроется в Telegram.\n"
+                    "Задержка потока обычно 15–30 секунд."
+                )
+
+            keyboard = _live_watch_keyboard(settings, for_channel=for_channel)
+            try:
+                await message.answer(text, reply_markup=keyboard)
+            except TelegramBadRequest:
+                await message.answer(
+                    text,
+                    reply_markup=_live_watch_keyboard(settings, for_channel=True),
+                )
         except TelegramForbiddenError:
             log.warning("live: bot cannot send messages in chat %s", message.chat.id)
         except Exception:
