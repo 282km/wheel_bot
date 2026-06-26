@@ -26,9 +26,8 @@ _OG_IMAGE_RE_ALT = re.compile(
 
 RSS_FEEDS: tuple[tuple[str, str], ...] = (
     ("GipsyTeam", "https://www.gipsyteam.ru/rss/news.xml"),
-    ("GipsyTeam LIVE", "https://www.gipsyteam.ru/rss/reportages.xml"),
-    ("PokerNews", "https://www.pokernews.com/news/rss"),
-    ("CardPlayer", "https://www.cardplayer.com/rss/news"),
+    ("PokerNews", "https://www.pokernews.com/rss.php"),
+    ("CardPlayer", "https://www.cardplayer.com/poker-news.rss"),
 )
 
 
