@@ -570,8 +570,6 @@ def create_app(
                 kwargs["model"] = str(body.get("model") or "").strip()
             if "hour" in body:
                 kwargs["hour"] = int(body.get("hour"))
-            if "focus_events" in body:
-                kwargs["focus_events"] = str(body.get("focus_events") or "").strip()
             if body.get("clear_api_key"):
                 kwargs["clear_api_key"] = True
             elif "openai_api_key" in body:
@@ -609,7 +607,11 @@ def create_app(
                     extra = [f"🧪 Тест дайджеста (режим: {mode})."]
                     if post.news_title:
                         extra.append(f"Тема: {post.news_title}")
+                    if post.news_link:
+                        extra.append(f"Источник: {post.news_link}")
                     extra.append("📷 С фото" if post.image_url else "📷 Без фото")
+                    if post.image_url:
+                        extra.append(f"Фото: {post.image_url}")
                     await bot.send_message(admin_id, "\n".join(extra))
                     if image_warning:
                         await bot.send_message(admin_id, f"⚠️ {image_warning}")

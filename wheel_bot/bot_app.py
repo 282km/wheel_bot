@@ -327,7 +327,11 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 ]
                 if post.news_title:
                     lines.append(f"Тема: {post.news_title}")
+                if post.news_link:
+                    lines.append(f"Источник: {post.news_link}")
                 lines.append("📷 С фото" if post.image_url else "📷 Без фото")
+                if post.image_url:
+                    lines.append(f"Фото: {post.image_url}")
                 await message.answer("\n".join(lines))
                 if image_warning:
                     await message.answer(f"⚠️ {image_warning}")

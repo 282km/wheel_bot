@@ -92,7 +92,7 @@ def _local_tag(tag: str) -> str:
 def _text(elem: ET.Element | None) -> str:
     if elem is None:
         return ""
-    return re.sub(r"\s+", " ", (elem.text or "") + "".join(elem.itertext())).strip()
+    return re.sub(r"\s+", " ", "".join(elem.itertext())).strip()
 
 
 def _image_from_element(elem: ET.Element) -> Optional[str]:

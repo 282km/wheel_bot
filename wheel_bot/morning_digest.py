@@ -79,6 +79,7 @@ class MorningDigestPost:
     image_url: Optional[str] = None
     source_mode: str = "historical"  # news | historical
     news_title: Optional[str] = None
+    news_link: Optional[str] = None
 
 
 def _msk_now(cfg: MorningDigestConfig) -> datetime:
@@ -139,6 +140,10 @@ def _build_prompt(
         "- Без markdown (* _ `), только текст и эмодзи.\n"
         "- Не используй обращение «покерные друзья» и близкие варианты («друзья покера» и т.п.).\n"
         "- Не выдумывай цифры и имена, которых нет в источниках ниже.\n"
+        "- Не используй громкие слова вроде «сенсация», «разразилась», «историческое событие», "
+        "если источник прямо так не утверждает.\n"
+        "- Если источник сообщает только заголовок и краткое описание, формулируй осторожно: "
+        "«по данным PokerNews/GipsyTeam/CardPlayer», «в ленте появилась новость».\n"
         "- Не упоминай, что ты ИИ.\n\n"
         f"---\n{news_context}"
     )
@@ -231,6 +236,7 @@ async def prepare_morning_digest_post(
             image_url=featured.image_url,
             source_mode="news",
             news_title=featured.title,
+            news_link=featured.link,
         )
     return MorningDigestPost(text=text, source_mode="historical")
 
