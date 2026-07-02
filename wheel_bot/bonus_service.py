@@ -12,8 +12,8 @@ from wheel_bot.db import utc_now_iso
 
 BONUS_COOLDOWN = timedelta(hours=24)
 BONUS_WIN_ODDS = 500
-BONUS_AMOUNT_MIN = 5
-BONUS_AMOUNT_MAX = 10
+BONUS_AMOUNT_MIN = 3
+BONUS_AMOUNT_MAX = 5
 
 # Разовая акция: в день первого запуска первый успешный /bonus выигрывает гарантированно.
 KV_BONUS_GUARANTEED_PROMO_DATE = "bonus_guaranteed_promo_date"
