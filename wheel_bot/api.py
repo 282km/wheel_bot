@@ -566,16 +566,8 @@ def create_app(
             kwargs: dict[str, object] = {}
             if "enabled" in body:
                 kwargs["enabled"] = bool(body.get("enabled"))
-            if "model" in body:
-                kwargs["model"] = str(body.get("model") or "").strip()
             if "hour" in body:
                 kwargs["hour"] = int(body.get("hour"))
-            if body.get("clear_api_key"):
-                kwargs["clear_api_key"] = True
-            elif "openai_api_key" in body:
-                key = str(body.get("openai_api_key") or "").strip()
-                if key:
-                    kwargs["openai_api_key"] = key
             await save_morning_digest_settings(conn, settings, **kwargs)
             return JSONResponse(await morning_digest_settings_payload(conn, settings))
         except Exception as e:
@@ -586,9 +578,6 @@ def create_app(
             payload = await _auth(request, settings)
             if str(payload.get("role")) != "superadmin":
                 return JSONResponse({"error": "forbidden"}, status_code=403)
-            cfg = await load_morning_digest_config(conn, settings)
-            if not cfg.api_key:
-                return JSONResponse({"error": "API ключ не задан"}, status_code=400)
             admin_id = int(payload["tg_id"])
 
             async def _run_test_dm() -> None:
@@ -598,7 +587,8 @@ def create_app(
                         send_morning_post_to_chat,
                     )
 
-                    post = await prepare_morning_digest_post(conn, settings)
+                    async with db_lock:
+                        post = await prepare_morning_digest_post(conn, settings)
                     ok, image_warning = await send_morning_post_to_chat(bot, admin_id, post)
                     if not ok:
                         await bot.send_message(admin_id, "Не удалось отправить тест. Проверьте логи.")
@@ -615,16 +605,22 @@ def create_app(
                     await bot.send_message(admin_id, "\n".join(extra))
                     if image_warning:
                         await bot.send_message(admin_id, f"⚠️ {image_warning}")
-                except Exception:
+                except Exception as exc:
                     webhook_log.exception("morning digest test (dm) failed")
                     try:
-                        await bot.send_message(admin_id, "Ошибка генерации теста. Проверьте логи wheel-bot.")
+                        detail = str(exc).strip() or exc.__class__.__name__
+                        if len(detail) > 400:
+                            detail = detail[:397] + "..."
+                        await bot.send_message(
+                            admin_id,
+                            f"Ошибка теста дайджеста:\n{detail}\n\nПроверьте journalctl -u wheel-bot -n 50",
+                        )
                     except Exception:
                         pass
 
             asyncio.create_task(_run_test_dm())
             return JSONResponse(
-                {"ok": True, "delivery": "dm", "message": "Тест запущен — пост придёт вам в личку через ~10–40 сек."}
+                {"ok": True, "delivery": "dm", "message": "Тест запущен — пост придёт вам в личку через ~5–20 сек."}
             )
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=400)

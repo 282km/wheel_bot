@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import re
 import secrets
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
-from zoneinfo import ZoneInfo
+from wheel_bot.timezones import get_timezone
 
 import aiosqlite
 from aiogram import Bot
@@ -18,11 +17,10 @@ from wheel_bot import db
 from wheel_bot.morning_digest_settings import MorningDigestConfig, load_morning_digest_config
 from wheel_bot.notify import notify_superadmins
 from wheel_bot.poker_news_service import (
+    PokerNewsItem,
     _select_featured,
     attach_image,
     fetch_poker_news_digest,
-    format_news_context,
-    pick_featured_news,
 )
 
 if TYPE_CHECKING:
@@ -31,7 +29,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("wheel_bot.morning_digest")
 
 MORNING_DIGEST_KV_KEY = "morning_digest_last_date"
-OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
+_TELEGRAM_CAPTION_MAX = 1020
 
 # Обращения в приветствии — каждый день случайный стиль (не «покерные друзья»).
 _GREETING_AUDIENCE_HINTS: tuple[str, ...] = (
@@ -57,19 +55,25 @@ _GREETING_AUDIENCE_HINTS: tuple[str, ...] = (
     "фанаты красивого ривера",
 )
 
-_HISTORICAL_THEME_HINTS: tuple[str, ...] = (
-    "легендарные руки и раздачи в истории покера",
-    "знаменитые рекорды по выигрышам в турнирах",
-    "история и зал славы покера (Poker Hall of Fame)",
-    "великие хайроллеры и кэш-игроки прошлого",
-    "интересные факты о WSOP за разные годы (кроме 2003)",
-    "история European Poker Tour и его легендарные этапы",
-    "знаменитые блефы и противостояния за столами",
-    "эволюция онлайн-покера и культовые ники",
-    "истории Фила Айви, Дойла Брансона, Стю Унгара и других легенд",
-    "необычные и курьёзные случаи в турнирном покере",
-    "женщины-чемпионки и их достижения в покере",
-    "хайроллер-серии: Triton, Super High Roller Bowl и рекорды бай-инов",
+_HISTORICAL_FACTS: tuple[str, ...] = (
+    "В 1970 году первый WSOP собрал всего 7 игроков — победителя выбрали голосованием.",
+    "Фил Айви выиграл 10 браслетов WSOP и считается одним из сильнейших игроков всех времён.",
+    "Дойл Брансон написал «Super/System» — книгу, которая изменила понимание покера у целого поколения.",
+    "Стю Унгар выиграл Main Event WSOP три раза — рекорд, который долгое время казался недостижимым.",
+    "Ванесса Selbst — одна из самых успешных турнирных игроков среди женщин в истории покера.",
+    "Серия Triton Super High Roller прославилась турнирами с бай-инами в сотни тысяч долларов.",
+    "EPT Barcelona традиционно собирает одни из самых больших полей в Европе.",
+    "«Мёртвая рука» — тузы и восьмёрки — связана с легендой об убийстве Wild Bill Hickok за покерным столом.",
+    "Антонио Эсфандиари выиграл Big One for One Drop и $18,3 млн — один из крупнейших призов в истории.",
+    "Daniel Negreanu держит рекорд WSOP по количеству кэшей на серии.",
+    "Онлайн-бум 2003–2006 годов резко увеличил число игроков по всему миру.",
+    "Pot-Limit Omaha за последние годы стал одним из самых популярных форматов в кэше и турнирах.",
+    "Первые телевизионные трансляции WSOP начались в 1973 году — покер вышел к широкой аудитории.",
+    "Irish Open — один из старейших и самых узнаваемых живых турниров в Европе.",
+    "В покере нет «счёта карт» как в блэкджеке — каждая раздача независима, зато важна математика и психология.",
+    "Супер High Roller Bowl и Poker Masters сделали хайроллер-формат зрелищем для фанатов.",
+    "Женский турнир WSOP Ladies Event проходит с 1977 года и остаётся традицией серии.",
+    "Кэш-игры с блайндами $100/$200 и выше — отдельная вселенная, где сидят легенды вроде Фила Айви и Тома Двана.",
 )
 
 
@@ -83,7 +87,7 @@ class MorningDigestPost:
 
 
 def _msk_now(cfg: MorningDigestConfig) -> datetime:
-    return datetime.now(ZoneInfo(cfg.timezone))
+    return datetime.now(get_timezone(cfg.timezone))
 
 
 def _today_key(cfg: MorningDigestConfig, when: Optional[datetime] = None) -> str:
@@ -91,102 +95,60 @@ def _today_key(cfg: MorningDigestConfig, when: Optional[datetime] = None) -> str
     return dt.date().isoformat()
 
 
-def _build_prompt(
-    cfg: MorningDigestConfig,
+def _truncate_text(text: str, max_len: int) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= max_len:
+        return text
+    cut = text[: max_len - 1].rsplit(" ", 1)[0]
+    return f"{cut}…"
+
+
+def _trim_for_telegram(text: str, *, max_len: int = _TELEGRAM_CAPTION_MAX) -> str:
+    text = str(text or "").strip()
+    if len(text) <= max_len:
+        return text
+    trimmed = text[: max_len - 1].rsplit("\n", 1)[0].rstrip()
+    if len(trimmed) > max_len - 2:
+        trimmed = trimmed[: max_len - 2].rsplit("\n", 1)[0].rstrip()
+    return f"{trimmed}…"
+
+
+def _format_news_post(
     when: datetime,
+    featured: PokerNewsItem,
     *,
-    news_context: str,
-    featured_title: Optional[str],
-    use_news: bool,
     hot_topics: list[str],
 ) -> str:
-    day = when.strftime("%d.%m.%Y")
-    month_day = when.strftime("%d %B")
-    if use_news and featured_title:
-        topics_hint = ""
-        if hot_topics:
-            topics_hint = (
-                f" Сейчас в ленте особенно заметны: {', '.join(hot_topics)} — "
-                "но бери только то, что реально есть в списке новостей ниже."
-            )
-        fact_block = (
-            "2) Главный блок — самая актуальная и яркая новость из списка ниже."
-            f"{topics_hint} "
-            f"Основная тема: «{featured_title}». Перескажи живо и понятно по-русски, без копипасты заголовка."
-        )
-    else:
-        avoid_hint = secrets.choice(_HISTORICAL_THEME_HINTS)
-        fact_block = (
-            "2) Свежих ярких новостей в ленте нет — дай интересный исторический покерный факт. "
-            f"Возьми тему из этой области: {avoid_hint}. "
-            "Не рассказывай в очередной раз про Криса Манимейкера и WSOP 2003 — выбери что-то другое, "
-            "каждый день разную тему."
-        )
-
-    greeting_hint = secrets.choice(_GREETING_AUDIENCE_HINTS)
-
-    return (
-        f"Сегодня {day} ({month_day}) по календарю.\n\n"
-        "Напиши одно утреннее сообщение для покерного Telegram-чата на русском языке.\n\n"
-        "Структура:\n"
-        f"1) Короткое «доброе утро» с уместными эмодзи. Обращайся к чату в духе: "
-        f"«{greeting_hint}» (можно слегка переформулировать, но в том же стиле).\n"
-        f"{fact_block}\n"
-        "3) Пожелание удачного дня и крупных заносов в турнирах.\n\n"
-        "Требования:\n"
-        "- Дружелюбный живой тон.\n"
-        "- 6–10 строк, компактно.\n"
-        "- Эмодзи уместно, для красоты, но без перебора.\n"
-        "- Без markdown (* _ `), только текст и эмодзи.\n"
-        "- Не используй обращение «покерные друзья» и близкие варианты («друзья покера» и т.п.).\n"
-        "- Не выдумывай цифры и имена, которых нет в источниках ниже.\n"
-        "- Не используй громкие слова вроде «сенсация», «разразилась», «историческое событие», "
-        "если источник прямо так не утверждает.\n"
-        "- Если источник сообщает только заголовок и краткое описание, формулируй осторожно: "
-        "«по данным PokerNews/GipsyTeam/CardPlayer», «в ленте появилась новость».\n"
-        "- Не упоминай, что ты ИИ.\n\n"
-        f"---\n{news_context}"
-    )
+    greeting = secrets.choice(_GREETING_AUDIENCE_HINTS)
+    lines = [
+        f"☀️ Доброе утро, {greeting}!",
+        "",
+        f"📰 По данным {featured.source}:",
+        featured.title.strip(),
+    ]
+    if hot_topics:
+        lines.extend(["", f"🔥 В ленте сейчас заметны: {', '.join(hot_topics)}."])
+    summary = _truncate_text(re.sub(r"<[^>]+>", " ", featured.summary), 320)
+    if summary:
+        lines.extend(["", summary])
+    if featured.link:
+        lines.extend(["", f"🔗 {featured.link}"])
+    lines.extend(["", "🍀 Удачного дня и крупных заносов за столами!"])
+    return _trim_for_telegram("\n".join(lines))
 
 
-def _openai_chat_sync(api_key: str, model: str, prompt: str) -> str:
-    payload = {
-        "model": model,
-        "temperature": 0.8,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Ты автор утренних постов для дружеского покерного Telegram-чата. "
-                    "Пиши только на русском. Сам определяй актуальные темы по свежим новостям "
-                    "(WSOP, EPT, WPT, APT, EAPT, Triton и другие серии — что сейчас в ленте). "
-                    "Не зацикливайся на прошедших сериях, если их уже нет в свежих заголовках. "
-                    "В приветствии обращайся к чату по-братски (братва, покерная братва, братва по масти и т.п.), "
-                    "никогда не пиши «покерные друзья»."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-    }
-    req = urllib.request.Request(
-        OPENAI_CHAT_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=45) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    choices = data.get("choices") or []
-    if not choices:
-        raise RuntimeError("OpenAI returned no choices")
-    message = choices[0].get("message") or {}
-    text = str(message.get("content") or "").strip()
-    if not text:
-        raise RuntimeError("OpenAI returned empty content")
-    return text
+def _format_historical_post(when: datetime) -> str:
+    greeting = secrets.choice(_GREETING_AUDIENCE_HINTS)
+    fact = secrets.choice(_HISTORICAL_FACTS)
+    lines = [
+        f"☀️ Доброе утро, {greeting}!",
+        "",
+        "📚 Покерный факт дня:",
+        fact,
+        "",
+        "🍀 Удачного дня и крупных заносов за столами!",
+    ]
+    return "\n".join(lines)
 
 
 async def prepare_morning_digest_post(
@@ -196,41 +158,20 @@ async def prepare_morning_digest_post(
     when: Optional[datetime] = None,
 ) -> MorningDigestPost:
     cfg = await load_morning_digest_config(conn, settings)
-    if not cfg.api_key:
-        raise RuntimeError("OpenAI API key is not configured")
-
     dt = when or _msk_now(cfg)
-    news_warnings: list[str] = []
-    news_items: list = []
-    hot_topics: list[str] = []
     featured = None
+    hot_topics: list[str] = []
     try:
         digest = await fetch_poker_news_digest(limit=12)
-        news_items = digest.items
         hot_topics = digest.hot_topics
-        featured = _select_featured(news_items)
+        featured = _select_featured(digest.items)
         if featured is not None:
             featured = await attach_image(featured)
-    except Exception as exc:
-        news_warnings.append(f"не удалось загрузить RSS: {exc}")
+    except Exception:
         log.exception("morning digest: poker news fetch failed")
 
-    use_news = featured is not None
-    news_context = format_news_context(news_items, hot_topics)
-    if news_warnings:
-        news_context = f"{news_context}\n\n(Предупреждение: {'; '.join(news_warnings)})"
-
-    prompt = _build_prompt(
-        cfg,
-        dt,
-        news_context=news_context,
-        featured_title=featured.title if featured else None,
-        use_news=use_news,
-        hot_topics=hot_topics,
-    )
-    text = await asyncio.to_thread(_openai_chat_sync, cfg.api_key, cfg.model, prompt)
-
-    if use_news and featured:
+    if featured is not None:
+        text = _format_news_post(dt, featured, hot_topics=hot_topics)
         return MorningDigestPost(
             text=text,
             image_url=featured.image_url,
@@ -238,6 +179,8 @@ async def prepare_morning_digest_post(
             news_title=featured.title,
             news_link=featured.link,
         )
+
+    text = _format_historical_post(dt)
     return MorningDigestPost(text=text, source_mode="historical")
 
 
@@ -289,10 +232,17 @@ async def send_morning_post_to_chat(
     post: MorningDigestPost,
 ) -> tuple[bool, Optional[str]]:
     """Отправка поста как в чат: фото с подписью или текст. Возвращает (успех, предупреждение о фото)."""
+    text = (post.text or "").strip()
+    if not text:
+        raise ValueError("morning digest post text is empty")
+
     image_warning: Optional[str] = None
-    if post.image_url:
+    photo = (post.image_url or "").strip()
+    if photo.startswith("//"):
+        photo = "https:" + photo
+    if photo.startswith(("http://", "https://")):
         try:
-            await bot.send_photo(chat_id, photo=post.image_url, caption=post.text)
+            await bot.send_photo(chat_id, photo=photo, caption=text)
             return True, None
         except (TelegramBadRequest, TelegramForbiddenError) as exc:
             image_warning = f"фото не отправилось ({exc}), отправлен только текст"
@@ -301,7 +251,7 @@ async def send_morning_post_to_chat(
             image_warning = f"фото не отправилось ({exc}), отправлен только текст"
             log.exception("morning digest: photo send failed")
 
-    await bot.send_message(chat_id, post.text)
+    await bot.send_message(chat_id, text)
     return True, image_warning
 
 
@@ -317,7 +267,7 @@ async def send_morning_digest(
     """Отправить утренний дайджест в чат статистики. Возвращает True, если отправлено."""
     async with db_lock:
         cfg = await load_morning_digest_config(conn, settings)
-    if not cfg.enabled or not cfg.api_key:
+    if not cfg.enabled:
         return False
 
     now = when or _msk_now(cfg)
@@ -390,7 +340,7 @@ async def run_morning_digest_scheduler(
         try:
             async with db_lock:
                 cfg = await load_morning_digest_config(conn, settings)
-            if cfg.enabled and cfg.api_key:
+            if cfg.enabled:
                 await send_morning_digest(bot, settings, conn, db_lock)
         except asyncio.CancelledError:
             raise

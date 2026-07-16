@@ -1251,23 +1251,14 @@ function bindWheelPostSettings() {
 
 function updateMorningDigestUi(data) {
   const enabled = $("#morning-digest-enabled");
-  const model = $("#morning-openai-model");
   const hour = $("#morning-digest-hour");
-  const status = $("#morning-openai-key-status");
-  const clearCb = $("#morning-clear-api-key");
+  const status = $("#morning-digest-status");
   if (enabled) enabled.checked = !!data.enabled;
-  if (model) model.value = data.model || "gpt-4o-mini";
   if (hour) hour.value = String(data.hour ?? 8);
-  if (clearCb) clearCb.checked = false;
-  const keyInput = $("#morning-openai-key");
-  if (keyInput) keyInput.value = "";
   if (status) {
-    if (data.api_key_configured) {
-      const src = data.api_key_source === "env" ? "из .env" : "в WebApp";
-      status.textContent = `Ключ задан (${src}): ${data.api_key_mask || "••••"}`;
-    } else {
-      status.textContent = "Ключ не задан — утренний дайджест не будет работать.";
-    }
+    status.textContent = data.enabled
+      ? `Включён, отправка в ${data.hour ?? 8}:00 (${data.timezone || "Europe/Moscow"}).`
+      : "Выключен — утренние посты не отправляются.";
   }
 }
 
@@ -1287,12 +1278,8 @@ function bindMorningDigestSettings() {
       const submitBtn = form.querySelector('button[type="submit"]');
       const body = {
         enabled: !!$("#morning-digest-enabled")?.checked,
-        model: String($("#morning-openai-model")?.value || "").trim(),
         hour: Number($("#morning-digest-hour")?.value || 8),
-        clear_api_key: !!$("#morning-clear-api-key")?.checked,
       };
-      const key = String($("#morning-openai-key")?.value || "").trim();
-      if (key) body.openai_api_key = key;
       try {
         await withButtonFeedback(submitBtn, async () => {
           const data = await api("/api/admin/morning-digest", {
@@ -1318,7 +1305,7 @@ function bindMorningDigestSettings() {
           if (preview) {
             preview.textContent =
               res.message ||
-              "Тест запущен — пост придёт вам в личку через ~10–40 сек.";
+              "Тест запущен — пост придёт вам в личку через ~5–20 сек.";
           }
         });
       } catch (err) {

@@ -294,14 +294,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         if role != "superadmin":
             await message.answer("Команда только для superadmin.")
             return
-        from wheel_bot.morning_digest_settings import load_morning_digest_config
-
-        async with db_lock:
-            cfg = await load_morning_digest_config(conn, settings)
-        if not cfg.api_key:
-            await message.answer("API ключ не задан. Укажите во вкладке «Админ» в WebApp.")
-            return
-        await message.answer("Генерирую утренний пост… пришлю через ~10–40 сек.")
+        await message.answer("Генерирую утренний пост… пришлю через ~5–20 сек.")
 
         async def _run_test() -> None:
             try:
@@ -338,7 +331,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             except Exception as exc:
                 log.exception("morning_test failed")
                 try:
-                    await message.answer(f"Ошибка генерации: {exc}")
+                    detail = str(exc).strip() or exc.__class__.__name__
+                    await message.answer(f"Ошибка генерации: {detail[:400]}")
                 except Exception:
                     pass
 
@@ -359,10 +353,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
 
         async with db_lock:
             cfg = await load_morning_digest_config(conn, settings)
-        if not cfg.api_key:
-            await message.answer("API ключ не задан. Укажите во вкладке «Админ» в WebApp.")
+        if not cfg.enabled:
+            await message.answer("Утренний дайджест выключен. Включите во вкладке «Админ» в WebApp.")
             return
-        await message.answer("Готовлю пост и отправляю в чат… ~10–40 сек.")
+        await message.answer("Готовлю пост и отправляю в чат… ~5–20 сек.")
 
         async def _run_send() -> None:
             try:

@@ -108,11 +108,7 @@ async def morning_digest_settings_payload(conn: aiosqlite.Connection, settings: 
     cfg = await load_morning_digest_config(conn, settings)
     return {
         "enabled": cfg.enabled,
-        "model": cfg.model,
         "hour": cfg.hour,
         "timezone": cfg.timezone,
-        "api_key_configured": bool(cfg.api_key),
-        "api_key_mask": mask_api_key(cfg.api_key),
-        "api_key_source": cfg.source,
-        "ready": bool(cfg.enabled and cfg.api_key),
+        "ready": bool(cfg.enabled),
     }

@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
-from zoneinfo import ZoneInfo
+from wheel_bot.timezones import get_timezone
 
 import aiosqlite
 
@@ -75,7 +75,7 @@ def format_bonus_wait(seconds: int) -> str:
 
 
 def _bonus_today_key() -> str:
-    return datetime.now(ZoneInfo(BONUS_TIMEZONE)).date().isoformat()
+    return datetime.now(get_timezone(BONUS_TIMEZONE)).date().isoformat()
 
 
 async def _consume_guaranteed_promo(conn: aiosqlite.Connection, today: str) -> None:

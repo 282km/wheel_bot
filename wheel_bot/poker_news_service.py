@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
-from zoneinfo import ZoneInfo
+from wheel_bot.timezones import get_timezone
 
 log = logging.getLogger("wheel_bot.poker_news")
 
@@ -392,7 +392,7 @@ def format_news_context(items: list[PokerNewsItem], hot_topics: list[str]) -> st
     for i, item in enumerate(items[:6], start=1):
         when = ""
         if item.published:
-            when = item.published.astimezone(ZoneInfo("Europe/Moscow")).strftime("%d.%m %H:%M")
+            when = item.published.astimezone(get_timezone("Europe/Moscow")).strftime("%d.%m %H:%M")
         score = f", релевантность {item.focus_score}" if item.focus_score else ""
         lines.append(f"{i}. [{item.source}] {item.title}")
         if item.summary:
