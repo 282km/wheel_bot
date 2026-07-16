@@ -25,11 +25,13 @@ _OG_IMAGE_RE_ALT = re.compile(
     re.IGNORECASE,
 )
 
+# Русскоязычные RSS-ленты покерных новостей.
 RSS_FEEDS: tuple[tuple[str, str], ...] = (
     ("GipsyTeam", "https://www.gipsyteam.ru/rss/news.xml"),
-    ("PokerNews", "https://www.pokernews.com/rss.php"),
-    ("CardPlayer", "https://www.cardplayer.com/poker-news.rss"),
+    ("Pokeroff", "https://www.pokeroff.ru/rss"),
 )
+
+_RUSSIAN_SOURCES = frozenset(name for name, _ in RSS_FEEDS)
 
 
 @dataclass(frozen=True)
@@ -249,6 +251,9 @@ def _score_item_auto(item: PokerNewsItem, hot_topics: list[str], *, now: Optiona
 
     if any(sig in hay for sig in _EVENT_SIGNALS):
         score += 8
+
+    if item.source in _RUSSIAN_SOURCES:
+        score += 5
 
     return score
 

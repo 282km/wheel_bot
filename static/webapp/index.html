@@ -214,32 +214,19 @@
               <div><strong>Утренний дайджест</strong></div>
               <p class="muted" style="margin:8px 0 10px; font-size:13px">
                 Каждый день в указанное время бот пишет в чат статистики: доброе утро, актуальную покерную
-                новость или исторический факт, с фото если доступно. Темы подбираются автоматически из свежих RSS.
+                новость из RSS (GipsyTeam, Pokeroff) или исторический факт, с фото если доступно.
+                GPT/OpenAI не нужен.
               </p>
               <form id="morning-digest-form" class="list">
                 <label class="row" style="margin:0 0 8px; cursor:pointer">
                   <input id="morning-digest-enabled" type="checkbox" />
                   <span>Включить утренний дайджест</span>
                 </label>
-                <label>
-                  OpenAI API ключ
-                  <input id="morning-openai-key" type="password" autocomplete="off" placeholder="sk-... (оставьте пустым — не менять)" />
+                <label style="width:120px">
+                  Час (МСК)
+                  <input id="morning-digest-hour" type="number" min="0" max="23" step="1" />
                 </label>
-                <p id="morning-openai-key-status" class="muted" style="margin:4px 0 8px; font-size:13px"></p>
-                <label class="row" style="margin:0 0 8px; cursor:pointer">
-                  <input id="morning-clear-api-key" type="checkbox" />
-                  <span>Удалить сохранённый ключ</span>
-                </label>
-                <div class="row">
-                  <label style="flex:1">
-                    Модель
-                    <input id="morning-openai-model" type="text" placeholder="gpt-4o-mini" />
-                  </label>
-                  <label style="width:120px">
-                    Час (МСК)
-                    <input id="morning-digest-hour" type="number" min="0" max="23" step="1" />
-                  </label>
-                </div>
+                <p id="morning-digest-status" class="muted" style="margin:4px 0 8px; font-size:13px"></p>
                 <div class="row">
                   <button type="submit">Сохранить дайджест</button>
                   <button id="morning-digest-test" type="button">Тест генерации</button>
