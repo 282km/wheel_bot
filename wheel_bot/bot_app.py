@@ -31,6 +31,17 @@ from wheel_bot.blackjack_service import (
     stand_blackjack,
     start_blackjack,
 )
+from wheel_bot.dogslot_service import (
+    DogslotUiState,
+    DogslotView,
+    clear_session as clear_dogslot_session,
+    dogslot_action,
+    get_session as get_dogslot_session,
+    get_ui_state as get_dogslot_ui_state,
+    save_ui_state as save_dogslot_ui_state,
+    set_board_message_id as set_dogslot_board_message_id,
+    spin_dogslot,
+)
 from wheel_bot.mines_service import (
     GRID_SIZE,
     MinesUiState,
@@ -324,6 +335,28 @@ def _mines_mine_count(message: Message) -> int:
     except ValueError:
         return 3
     return count if count in (3, 5, 10) else 3
+
+
+def _is_dogslot_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    token = _first_command_token(message.text)
+    return token in ("/dogslot", "/dog")
+
+
+def _dogslot_keyboard(view: DogslotView, owner_id: int) -> InlineKeyboardMarkup | None:
+    if not view.can_act or view.action == "none":
+        return None
+    oid = int(owner_id)
+    if view.action == "pick":
+        label, data = "🎁 Раскрутить 3×3", f"dh:p:{oid}"
+    elif view.action == "free_spin":
+        label, data = "🎰 Free Spin", f"dh:f:{oid}"
+    else:
+        label, data = "🎰 Spin", f"dh:s:{oid}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=label, callback_data=data)]]
+    )
 
 
 def _games_subcommand(message: Message) -> str | None:
@@ -1049,6 +1082,131 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 board_message_id=board_mid,
             )
 
+    async def _cleanup_dogslot_messages(
+        bot,
+        telegram_id: int,
+        chat_id: int,
+    ) -> None:
+        async with db_lock:
+            ui = await get_dogslot_ui_state(conn, int(telegram_id))
+            session = await get_dogslot_session(conn, int(telegram_id))
+            if session is not None:
+                await clear_dogslot_session(conn, int(telegram_id))
+
+        to_delete: list[int] = []
+        if ui:
+            if ui.board_message_id is not None:
+                to_delete.append(int(ui.board_message_id))
+            if ui.command_message_id is not None:
+                to_delete.append(int(ui.command_message_id))
+        if session and session.message_id is not None:
+            mid = int(session.message_id)
+            if mid not in to_delete:
+                to_delete.append(mid)
+
+        for mid in to_delete:
+            try:
+                await bot.delete_message(chat_id=int(chat_id), message_id=mid)
+            except TelegramBadRequest:
+                pass
+            except Exception:
+                log.debug("dogslot cleanup delete failed chat=%s msg=%s", chat_id, mid, exc_info=True)
+
+        async with db_lock:
+            await save_dogslot_ui_state(
+                conn,
+                DogslotUiState(telegram_id=int(telegram_id), chat_id=int(chat_id)),
+            )
+
+    async def _remember_dogslot_command(
+        telegram_id: int,
+        chat_id: int,
+        command_message_id: int,
+    ) -> None:
+        async with db_lock:
+            ui = await get_dogslot_ui_state(conn, int(telegram_id))
+            await save_dogslot_ui_state(
+                conn,
+                DogslotUiState(
+                    telegram_id=int(telegram_id),
+                    chat_id=int(chat_id),
+                    board_message_id=ui.board_message_id if ui else None,
+                    command_message_id=int(command_message_id),
+                ),
+            )
+
+    async def _remember_dogslot_board(telegram_id: int, chat_id: int, board_message_id: int) -> None:
+        async with db_lock:
+            ui = await get_dogslot_ui_state(conn, int(telegram_id))
+            cmd_mid = ui.command_message_id if ui else None
+            await save_dogslot_ui_state(
+                conn,
+                DogslotUiState(
+                    telegram_id=int(telegram_id),
+                    chat_id=int(chat_id),
+                    board_message_id=int(board_message_id),
+                    command_message_id=cmd_mid,
+                ),
+            )
+
+    async def _send_dogslot_view(
+        message: Message,
+        view: DogslotView,
+        *,
+        owner_id: int,
+        edit_message: Message | None = None,
+        board_message_id: int | None = None,
+    ) -> int | None:
+        markup = _dogslot_keyboard(view, owner_id)
+        text = view.text
+        chat_id = int(message.chat.id)
+        result_id: int | None = board_message_id
+
+        try:
+            if edit_message is not None:
+                await edit_message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+                result_id = int(edit_message.message_id)
+            elif board_message_id is not None:
+                await message.bot.edit_message_text(
+                    text,
+                    chat_id=chat_id,
+                    message_id=board_message_id,
+                    parse_mode="Markdown",
+                    reply_markup=markup,
+                )
+                result_id = board_message_id
+            else:
+                sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
+                result_id = int(sent.message_id)
+                async with db_lock:
+                    session = await get_dogslot_session(conn, owner_id)
+                    if session is not None:
+                        await set_dogslot_board_message_id(conn, owner_id, result_id)
+        except TelegramBadRequest:
+            plain = text.replace("*", "")
+            try:
+                if edit_message is not None:
+                    await edit_message.edit_text(plain, reply_markup=markup)
+                    result_id = int(edit_message.message_id)
+                elif board_message_id is not None:
+                    await message.bot.edit_message_text(
+                        plain,
+                        chat_id=chat_id,
+                        message_id=board_message_id,
+                        reply_markup=markup,
+                    )
+                    result_id = board_message_id
+                else:
+                    sent = await message.answer(plain, reply_markup=markup)
+                    result_id = int(sent.message_id)
+            except TelegramBadRequest:
+                sent = await message.answer(plain, reply_markup=markup)
+                result_id = int(sent.message_id)
+
+        if result_id is not None:
+            await _remember_dogslot_board(owner_id, chat_id, result_id)
+        return result_id
+
     async def _user_role(telegram_id: int) -> str:
         async with db_lock:
             return await db.ensure_user(conn, telegram_id)
@@ -1074,10 +1232,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         morning = "✅ включена" if st["morning"] else "❌ выключена"
         await message.answer(
             "⚙️ Функции бота\n\n"
-            f"🎮 Мини-игры (BJ + мины): {games}\n"
+            f"🎮 Мини-игры (BJ + мины + Dog House): {games}\n"
             f"☀️ Утренняя сводка: {morning}\n\n"
             "Включить:\n"
-            "/games_on — блэкджек и мины\n"
+            "/games_on — все мини-игры\n"
             "/morning_on — утро в 8:00 (час в WebApp)\n\n"
             "Выключить:\n"
             "/games_off · /morning_off"
@@ -1090,9 +1248,9 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         async with db_lock:
             await set_mini_games_enabled(conn, True)
         await message.answer(
-            "🎮 Мини-игры включены (блэкджек + мины).\n"
+            "🎮 Мини-игры включены (BJ + мины + Dog House).\n"
             "В чате: /games help · /games_welcome — инструкция для всех.\n"
-            "🃏 /blackjack · 💣 /mines"
+            "🃏 /blackjack · 💣 /mines · 🐶 /dogslot"
         )
 
     @router.message(Command("games_off"))
@@ -1587,6 +1745,133 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             log.exception("mines callback failed")
             try:
                 await cb.answer("Ошибка. Попробуйте /mines", show_alert=True)
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_dogslot_command(message))
+    async def dogslot_cmd(message: Message) -> None:
+        try:
+            if not await _require_stats_group(message, "/dogslot"):
+                return
+            if not await _require_mini_games(message):
+                return
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            uid = int(user.id)
+            chat_id = int(message.chat.id)
+            async with db_lock:
+                label = await remember_telegram_user(conn, user)
+                session = await get_dogslot_session(conn, uid)
+            if session is None:
+                await _cleanup_dogslot_messages(message.bot, uid, chat_id)
+            async with db_lock:
+                err, view = await spin_dogslot(
+                    conn,
+                    telegram_id=uid,
+                    user_label=label,
+                    chat_id=chat_id,
+                )
+            if err:
+                await _reply_md(message, err)
+                return
+            if view:
+                await _send_dogslot_view(message, view, owner_id=uid)
+                if session is None:
+                    await _remember_dogslot_command(uid, chat_id, int(message.message_id))
+        except TelegramForbiddenError:
+            log.warning("dogslot: forbidden in chat %s", message.chat.id)
+        except Exception:
+            log.exception("dogslot handler failed")
+            try:
+                await message.answer("Ошибка /dogslot. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
+
+    @router.callback_query(F.data.startswith("dh:"))
+    async def dogslot_callback(cb: CallbackQuery) -> None:
+        try:
+            user = cb.from_user
+            if not user or user.is_bot:
+                await cb.answer()
+                return
+            if not cb.message:
+                await cb.answer()
+                return
+
+            parts = (cb.data or "").split(":")
+            if len(parts) != 3:
+                await cb.answer("Устаревшие кнопки. Начните /dogslot", show_alert=True)
+                return
+            action, owner_raw = parts[1], parts[2]
+            if action not in ("s", "p", "f"):
+                await cb.answer()
+                return
+            try:
+                owner_id = int(owner_raw)
+            except ValueError:
+                await cb.answer("Устаревшие кнопки. Начните /dogslot", show_alert=True)
+                return
+            if int(user.id) != owner_id:
+                await cb.answer("Это слот другого игрока.", show_alert=True)
+                return
+
+            async with db_lock:
+                enabled = await mini_games_enabled(conn, settings)
+            if not enabled:
+                role = await _user_role(int(user.id))
+                if role != "superadmin":
+                    await cb.answer("Мини-игры выключены.", show_alert=True)
+                    return
+            target_id = _configured_stats_chat_id()
+            if int(cb.message.chat.id) != int(target_id):
+                await cb.answer("Кнопки работают только в чате статистики.", show_alert=True)
+                return
+
+            action_map = {"s": "spin", "p": "pick", "f": "free_spin"}
+            async with db_lock:
+                label = await remember_telegram_user(conn, user)
+                session = await get_dogslot_session(conn, owner_id)
+                ui = await get_dogslot_ui_state(conn, owner_id)
+                expected_board = None
+                if session and session.message_id:
+                    expected_board = int(session.message_id)
+                elif ui and ui.board_message_id:
+                    expected_board = int(ui.board_message_id)
+                if expected_board is not None and cb.message.message_id != expected_board:
+                    await cb.answer(
+                        "Это старое поле. Используйте актуальное сообщение своего слота.",
+                        show_alert=True,
+                    )
+                    return
+                err, view = await dogslot_action(
+                    conn,
+                    telegram_id=owner_id,
+                    user_label=label,
+                    chat_id=int(cb.message.chat.id),
+                    action=action_map[action],  # type: ignore[arg-type]
+                )
+
+            if err:
+                await cb.answer(err.replace("`", "").replace("*", ""), show_alert=True)
+                return
+            if not view:
+                await cb.answer()
+                return
+            await cb.answer()
+            await _send_dogslot_view(
+                cb.message,
+                view,
+                owner_id=owner_id,
+                edit_message=cb.message,
+            )
+        except TelegramForbiddenError:
+            log.warning("dogslot callback: forbidden in chat %s", cb.message.chat.id if cb.message else "?")
+            await cb.answer()
+        except Exception:
+            log.exception("dogslot callback failed")
+            try:
+                await cb.answer("Ошибка. Попробуйте /dogslot", show_alert=True)
             except Exception:
                 pass
 

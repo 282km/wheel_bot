@@ -8,24 +8,21 @@ from wheel_bot.user_labels import plain_player_label
 def format_games_welcome() -> str:
     return (
         "🎮 *Мини-игры в чате*\n\n"
-        "Блэкджек и «Мины» — очки суммируются в общий топ недели.\n\n"
+        "Очки суммируются в общий топ недели.\n\n"
+        "*The Dog House 🐶 (5×3):*\n"
+        "🐶 `/dogslot` или `/dog` — спин\n"
+        "3 линии выплат · 🐾 scatter на барабанах 1–3–5\n"
+        "3 лапы → бонус: сетка 3×3 (9–27 фри-спинов)\n"
+        "🏠×2/×3 sticky wild на барабанах 2–3–4 во фри-спинах\n"
+        "Кулдаун 10 мин (не действует во время бонуса)\n\n"
         "*Блэкджек:*\n"
         "🃏 `/blackjack` или `/bj` — новая партия\n"
-        "🃏 Hit / ✋ Stand — кнопки под *вашей* доской\n"
-        "🃏 `/hit` · `/stand` — то же текстом\n\n"
+        "🃏 Hit / ✋ Stand — кнопки под *вашей* доской\n\n"
         "*Мины (5×5):*\n"
-        "💣 `/mines` или `/min` — новая игра (3 мины)\n"
-        "💣 `/mines 5` · `/mines 10` — больше мин\n"
-        "⬜ Открывайте клетки · 💰 «Забрать» — кэшаут\n"
-        "💣 `/cash` — забрать выигрыш текстом\n\n"
+        "💣 `/mines` или `/min` — новая игра\n"
+        "⬜ клетки · 💰 кэшаут · `/cash`\n\n"
         "*Общее:*\n"
-        "🏆 `/games` — топ-10 за неделю\n"
-        "📈 `/games me` — ваша статистика\n"
-        "❓ `/games help` — эта инструкция\n\n"
-        "*Очки блэкджек:* натуральная 21 = 70 · победа = 40 · ничья = 15 · проигрыш = 5\n"
-        "*Очки мины:* кэшаут ×множитель (до 150) · мина = 5\n\n"
-        "Кулдауна нет. Новая игра удаляет старые доски; последняя команда остаётся в чате.\n"
-        "Топ обнуляется каждый понедельник. Утром в 8:00 — сводка лидеров.\n\n"
+        "🏆 `/games` · 📈 `/games me` · ❓ `/games help`\n\n"
         "Также: `/stat` — колесо, `/bonus` — бонус раз в сутки 🍀"
     )
 
@@ -43,7 +40,7 @@ def format_leaderboard(data: dict[str, Any], *, viewer_id: Optional[int] = None)
             [
                 "Пока никто не играл на этой неделе.",
                 "",
-                "Начните с `/blackjack` или `/mines`!",
+                "Начните с `/dogslot`, `/blackjack` или `/mines`!",
             ]
         )
     else:
@@ -62,6 +59,7 @@ def format_leaderboard(data: dict[str, Any], *, viewer_id: Optional[int] = None)
                 f"🃏 Натуральных 21: {int(summary.get('naturals', 0))}",
                 f"🏆 Побед BJ: {int(summary.get('bj_wins', 0))}",
                 f"💰 Кэшаутов мин: {int(summary.get('mines_wins', 0))}",
+                f"🐶 Бонусов Dog House: {int(summary.get('dogslot_jackpots', 0))}",
             ]
         )
 
@@ -75,7 +73,7 @@ def format_leaderboard(data: dict[str, Any], *, viewer_id: Optional[int] = None)
             ]
         )
     lines.append("")
-    lines.append("Подробнее: `/games me` · 🃏 `/blackjack` · 💣 `/mines`")
+    lines.append("Подробнее: `/games me` · 🐶 `/dogslot` · 🃏 `/blackjack` · 💣 `/mines`")
     return "\n".join(lines)
 
 
@@ -88,6 +86,10 @@ def format_user_stats(data: dict[str, Any]) -> str:
         f"📅 {data.get('period_label', 'Эта неделя')}:",
         f"  🎮 Всего игр: {int(week.get('games', 0))}",
         f"  💎 Очков: {int(week.get('total_points', 0))}",
+        "",
+        f"  🐶 Dog House: {int(week.get('dogslot_games', 0))} игр, "
+        f"{int(week.get('dogslot_points', 0))} очков",
+        f"  🎁 Бонус-раундов: {int(week.get('dogslot_jackpots', 0))}",
         "",
         f"  🃏 Блэкджек: {int(week.get('bj_games', 0))} игр, {int(week.get('bj_points', 0))} очков",
         f"  🏆 Побед BJ: {int(week.get('bj_wins', 0))}",

@@ -10,10 +10,10 @@ from wheel_bot.db import utc_now_iso
 from wheel_bot.timezones import get_timezone
 from wheel_bot.user_labels import resolve_player_label
 
-GameType = Literal["blackjack", "mines"]
+GameType = Literal["blackjack", "mines", "dogslot"]
 
-MINI_GAME_TYPES = ("blackjack", "mines")
-MINI_GAME_TYPES_SQL = "('blackjack', 'mines')"
+MINI_GAME_TYPES = ("blackjack", "mines", "dogslot")
+MINI_GAME_TYPES_SQL = "('blackjack', 'mines', 'dogslot')"
 
 
 GAME_SCHEMA = """
@@ -36,10 +36,12 @@ async def ensure_game_schema(conn: aiosqlite.Connection) -> None:
     await conn.executescript(GAME_SCHEMA)
     await _migrate_game_plays(conn)
     from wheel_bot.blackjack_service import ensure_blackjack_schema
+    from wheel_bot.dogslot_service import ensure_dogslot_schema
     from wheel_bot.mines_service import ensure_mines_schema
 
     await ensure_blackjack_schema(conn)
     await ensure_mines_schema(conn)
+    await ensure_dogslot_schema(conn)
     await conn.commit()
 
 
@@ -123,11 +125,11 @@ async def _weekly_rank_map(
     week_end: datetime,
 ) -> dict[int, tuple[int, int]]:
     cur = await conn.execute(
-        """
+        f"""
         SELECT telegram_id, SUM(points) AS pts, COUNT(*) AS games
         FROM game_plays
         WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
-          AND game_type IN ('blackjack', 'mines')
+          AND game_type IN {MINI_GAME_TYPES_SQL}
         GROUP BY telegram_id
         ORDER BY pts DESC, games DESC, telegram_id ASC
         """,
@@ -170,7 +172,7 @@ async def weekly_summary(
             COUNT(*) AS games
         FROM game_plays g
         WHERE datetime(g.played_at) >= datetime(?) AND datetime(g.played_at) < datetime(?)
-          AND g.game_type IN ('blackjack', 'mines')
+          AND g.game_type IN {MINI_GAME_TYPES_SQL}
         GROUP BY g.telegram_id
         ORDER BY points DESC, games DESC, g.telegram_id ASC
         LIMIT {int(top_limit)}
@@ -191,16 +193,17 @@ async def weekly_summary(
 
     stats_row = await (
         await conn.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total_games,
                 COUNT(DISTINCT telegram_id) AS unique_players,
                 SUM(CASE WHEN game_type = 'blackjack' AND points = 70 THEN 1 ELSE 0 END) AS naturals,
                 SUM(CASE WHEN game_type = 'blackjack' AND points IN (40, 70) THEN 1 ELSE 0 END) AS bj_wins,
-                SUM(CASE WHEN game_type = 'mines' AND points >= 10 THEN 1 ELSE 0 END) AS mines_wins
+                SUM(CASE WHEN game_type = 'mines' AND points >= 10 THEN 1 ELSE 0 END) AS mines_wins,
+                SUM(CASE WHEN game_type = 'dogslot' AND points >= 100 THEN 1 ELSE 0 END) AS dogslot_jackpots
             FROM game_plays
             WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
-              AND game_type IN ('blackjack', 'mines')
+              AND game_type IN {MINI_GAME_TYPES_SQL}
             """,
             week_params,
         )
@@ -212,6 +215,7 @@ async def weekly_summary(
         "naturals": int(stats_row["naturals"] or 0) if stats_row else 0,
         "bj_wins": int(stats_row["bj_wins"] or 0) if stats_row else 0,
         "mines_wins": int(stats_row["mines_wins"] or 0) if stats_row else 0,
+        "dogslot_jackpots": int(stats_row["dogslot_jackpots"] or 0) if stats_row else 0,
     }
 
     viewer: Optional[dict[str, Any]] = None
@@ -237,18 +241,21 @@ async def user_week_stats(
 
     row = await (
         await conn.execute(
-            """
+            f"""
             SELECT
                 SUM(points) AS total_points,
                 COUNT(*) AS games,
                 SUM(CASE WHEN game_type = 'blackjack' THEN 1 ELSE 0 END) AS bj_games,
                 SUM(CASE WHEN game_type = 'mines' THEN 1 ELSE 0 END) AS mines_games,
+                SUM(CASE WHEN game_type = 'dogslot' THEN 1 ELSE 0 END) AS dogslot_games,
                 SUM(CASE WHEN game_type = 'blackjack' THEN points ELSE 0 END) AS bj_points,
                 SUM(CASE WHEN game_type = 'mines' THEN points ELSE 0 END) AS mines_points,
-                SUM(CASE WHEN game_type = 'blackjack' AND points = 70 THEN 1 ELSE 0 END) AS naturals
+                SUM(CASE WHEN game_type = 'dogslot' THEN points ELSE 0 END) AS dogslot_points,
+                SUM(CASE WHEN game_type = 'blackjack' AND points = 70 THEN 1 ELSE 0 END) AS naturals,
+                SUM(CASE WHEN game_type = 'dogslot' AND points >= 100 THEN 1 ELSE 0 END) AS dogslot_jackpots
             FROM game_plays
             WHERE telegram_id = ? AND datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
-              AND game_type IN ('blackjack', 'mines')
+              AND game_type IN {MINI_GAME_TYPES_SQL}
             """,
             params,
         )
@@ -262,6 +269,9 @@ async def user_week_stats(
         "mines_games": int(row["mines_games"] or 0) if row else 0,
         "bj_points": int(row["bj_points"] or 0) if row else 0,
         "mines_points": int(row["mines_points"] or 0) if row else 0,
+        "dogslot_games": int(row["dogslot_games"] or 0) if row else 0,
+        "dogslot_points": int(row["dogslot_points"] or 0) if row else 0,
+        "dogslot_jackpots": int(row["dogslot_jackpots"] or 0) if row else 0,
         "naturals": int(row["naturals"] or 0) if row else 0,
         "bj_wins": 0,
         "mines_cashouts": 0,
@@ -327,6 +337,17 @@ async def user_week_stats(
             (int(telegram_id),),
         )
     ).fetchone()
+    best_dogslot = await (
+        await conn.execute(
+            """
+            SELECT points, meta_json FROM game_plays
+            WHERE telegram_id = ? AND game_type = 'dogslot'
+            ORDER BY points DESC, played_at DESC
+            LIMIT 1
+            """,
+            (int(telegram_id),),
+        )
+    ).fetchone()
     best: list[str] = []
     if best_bj:
         pts = int(best_bj["points"])
@@ -342,6 +363,15 @@ async def user_week_stats(
             best.append(f"💣 мины ×{mult:.2f} (+{pts} очков)")
         except (json.JSONDecodeError, TypeError, ValueError):
             best.append(f"💣 мины (+{pts} очков)")
+    if best_dogslot:
+        pts = int(best_dogslot["points"])
+        try:
+            dmeta = json.loads(str(best_dogslot["meta_json"] or "{}"))
+            reels = dmeta.get("reels") or []
+            reel_text = " ".join(str(x) for x in reels) if reels else "🐶🐶🐶"
+            best.append(f"🐶 dog slot {reel_text} (+{pts} очков)")
+        except (json.JSONDecodeError, TypeError, ValueError):
+            best.append(f"🐶 dog slot (+{pts} очков)")
 
     return {
         "label": label,
@@ -378,7 +408,7 @@ async def format_morning_games_digest(
             [
                 "Пока никто не играл — самое время начать!",
                 "",
-                "🃏 `/blackjack` · 💣 `/mines` · 📖 `/games help`",
+                "🃏 `/blackjack` · 💣 `/mines` · 🐶 `/dogslot` · 📖 `/games help`",
             ]
         )
     else:
@@ -394,7 +424,8 @@ async def format_morning_games_digest(
                 f"Игроков: {summary.get('unique_players', 0)} · "
                 f"🃏 натуральных 21: {summary.get('naturals', 0)} · "
                 f"побед BJ: {summary.get('bj_wins', 0)} · "
-                f"кэшаутов мин: {summary.get('mines_wins', 0)}",
+                f"кэшаутов мин: {summary.get('mines_wins', 0)} · "
+                f"🐶 джекпотов: {summary.get('dogslot_jackpots', 0)}",
             ]
         )
 
