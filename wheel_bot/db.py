@@ -115,6 +115,17 @@ async def connect(db_path: Path) -> aiosqlite.Connection:
     user_names = {str(r["name"]) for r in user_cols}
     if "display_name" not in user_names:
         await conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+    from wheel_bot.user_labels import is_likely_username
+
+    scrub_cur = await conn.execute(
+        "SELECT telegram_id, display_name FROM users WHERE display_name != ''"
+    )
+    for urow in await scrub_cur.fetchall():
+        if is_likely_username(str(urow["display_name"])):
+            await conn.execute(
+                "UPDATE users SET display_name = '' WHERE telegram_id = ?",
+                (int(urow["telegram_id"]),),
+            )
     from wheel_bot.game_service import ensure_game_schema
 
     await ensure_game_schema(conn)

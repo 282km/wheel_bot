@@ -8,7 +8,7 @@ import aiosqlite
 
 from wheel_bot.db import utc_now_iso
 from wheel_bot.timezones import get_timezone
-from wheel_bot.user_labels import plain_player_label, resolve_player_label
+from wheel_bot.user_labels import resolve_player_label
 
 GameType = Literal["blackjack"]
 
@@ -156,44 +156,33 @@ async def weekly_summary(
 ) -> dict[str, Any]:
     week_start, week_end, period_label = week_bounds(when)
     week_params = (week_start.isoformat(), week_end.isoformat())
-    top_params = (*week_params, *week_params)
 
     cur = await conn.execute(
         f"""
         SELECT
             g.telegram_id,
-            COALESCE(
-                NULLIF(u.display_name, ''),
-                (
-                    SELECT gp2.user_label FROM game_plays gp2
-                    WHERE gp2.telegram_id = g.telegram_id
-                      AND datetime(gp2.played_at) >= datetime(?) AND datetime(gp2.played_at) < datetime(?)
-                    ORDER BY gp2.played_at DESC
-                    LIMIT 1
-                ),
-                'Игрок'
-            ) AS label,
             SUM(g.points) AS points,
             COUNT(*) AS games
         FROM game_plays g
-        LEFT JOIN users u ON u.telegram_id = g.telegram_id
         WHERE datetime(g.played_at) >= datetime(?) AND datetime(g.played_at) < datetime(?)
           AND g.game_type = 'blackjack'
         GROUP BY g.telegram_id
-        ORDER BY points DESC, games DESC, label COLLATE NOCASE ASC
+        ORDER BY points DESC, games DESC, g.telegram_id ASC
         LIMIT {int(top_limit)}
         """,
-        top_params,
+        week_params,
     )
-    top = [
-        {
-            "telegram_id": int(r["telegram_id"]),
-            "label": plain_player_label(str(r["label"])),
-            "points": int(r["points"]),
-            "games": int(r["games"]),
-        }
-        for r in await cur.fetchall()
-    ]
+    top = []
+    for r in await cur.fetchall():
+        tid = int(r["telegram_id"])
+        top.append(
+            {
+                "telegram_id": tid,
+                "label": await resolve_player_label(conn, tid),
+                "points": int(r["points"]),
+                "games": int(r["games"]),
+            }
+        )
 
     stats_row = await (
         await conn.execute(
