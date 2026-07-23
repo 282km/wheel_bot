@@ -56,6 +56,7 @@ from wheel_bot.mines_service import (
     save_ui_state as save_mines_ui_state,
     set_board_message_id as set_mines_board_message_id,
     start_mines,
+    view_for_session,
 )
 from wheel_bot.config import Settings
 from wheel_bot.feature_flags import (
@@ -438,6 +439,16 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     log = logging.getLogger("wheel_bot.bot")
     dogslot_user_locks: dict[int, asyncio.Lock] = {}
     mines_user_locks: dict[int, asyncio.Lock] = {}
+    mines_board_gen: dict[int, int] = {}
+
+    def _bump_mines_board_gen(telegram_id: int) -> int:
+        tid = int(telegram_id)
+        gen = mines_board_gen.get(tid, 0) + 1
+        mines_board_gen[tid] = gen
+        return gen
+
+    def _mines_board_gen_current(telegram_id: int) -> int:
+        return mines_board_gen.get(int(telegram_id), 0)
 
     def _dogslot_user_lock(telegram_id: int) -> asyncio.Lock:
         tid = int(telegram_id)
@@ -1068,7 +1079,11 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         owner_id: int,
         edit_message: Message | None = None,
         board_message_id: int | None = None,
+        board_gen: int | None = None,
     ) -> int | None:
+        if board_gen is not None and _mines_board_gen_current(owner_id) != board_gen:
+            return None
+
         markup = _mines_keyboard(view, owner_id)
         text = view.text
         chat_id = int(message.chat.id)
@@ -1094,14 +1109,47 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 else:
                     log.warning("mines edit failed chat=%s msg=%s: %s", chat_id, result_id, exc)
             except TelegramRetryAfter as exc:
-                log.warning("mines edit flood chat=%s wait=%ss", chat_id, exc.retry_after)
+                wait = float(exc.retry_after) + 0.5
+                log.warning("mines edit flood chat=%s wait=%ss (defer retry)", chat_id, exc.retry_after)
+                mid = int(result_id)
+
+                async def _deferred_edit() -> None:
+                    await asyncio.sleep(wait)
+                    if board_gen is not None and _mines_board_gen_current(owner_id) != board_gen:
+                        return
+                    try:
+                        await message.bot.edit_message_text(
+                            text,
+                            chat_id=chat_id,
+                            message_id=mid,
+                            reply_markup=markup,
+                        )
+                        if board_gen is not None and _mines_board_gen_current(owner_id) != board_gen:
+                            return
+                        await _remember_mines_board(owner_id, chat_id, mid)
+                        if view.finished:
+                            async with db_lock:
+                                await clear_mines_session(conn, owner_id)
+                    except Exception:
+                        log.debug("mines deferred edit failed chat=%s msg=%s", chat_id, mid, exc_info=True)
+
+                asyncio.create_task(_deferred_edit())
+                return mid
 
         if not updated:
+            if board_gen is not None and _mines_board_gen_current(owner_id) != board_gen:
+                return None
             try:
-                sent = await _call_telegram_with_retry(
-                    lambda: message.reply(text, reply_markup=markup)
-                )
-                result_id = int(sent.message_id)
+                if edit_message is not None:
+                    await _call_telegram_with_retry(
+                        lambda: edit_message.edit_text(text, reply_markup=markup)
+                    )
+                    result_id = int(edit_message.message_id)
+                else:
+                    sent = await _call_telegram_with_retry(
+                        lambda: message.reply(text, reply_markup=markup)
+                    )
+                    result_id = int(sent.message_id)
                 updated = True
             except TelegramRetryAfter as exc:
                 log.warning("mines send flood chat=%s wait=%ss", chat_id, exc.retry_after)
@@ -1109,6 +1157,9 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             except Exception:
                 log.exception("mines send fallback failed")
                 return None
+
+        if board_gen is not None and _mines_board_gen_current(owner_id) != board_gen:
+            return result_id
 
         if result_id is not None and updated:
             await _remember_mines_board(owner_id, chat_id, result_id)
@@ -1792,15 +1843,20 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     await cb.answer("Устаревшие кнопки. Начните /mines", show_alert=True)
                     return
                 await cb.answer()
-                async with db_lock:
-                    label = await remember_telegram_user(conn, user)
-                    err, view = await start_mines(
-                        conn,
-                        telegram_id=owner_id,
-                        user_label=label,
-                        chat_id=int(cb.message.chat.id),
-                        mine_count=mine_count,
-                    )
+                user_lock = _mines_user_lock(owner_id)
+                board_gen = 0
+                async with user_lock:
+                    async with db_lock:
+                        label = await remember_telegram_user(conn, user)
+                        err, view = await start_mines(
+                            conn,
+                            telegram_id=owner_id,
+                            user_label=label,
+                            chat_id=int(cb.message.chat.id),
+                            mine_count=mine_count,
+                        )
+                    if view is not None:
+                        board_gen = _bump_mines_board_gen(owner_id)
                 if err:
                     try:
                         await cb.message.reply(err.replace("`", "").replace("*", ""))
@@ -1814,6 +1870,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                             view,
                             owner_id=owner_id,
                             edit_message=cb.message,
+                            board_gen=board_gen,
                         )
                     except Exception:
                         log.exception("mines restart view update failed")
@@ -1822,13 +1879,14 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             await cb.answer()
 
             user_lock = _mines_user_lock(owner_id)
-            async with user_lock:
-                stale_board = False
-                wrong_board = False
-                resync_view: MinesView | None = None
-                err: str | None = None
-                view: MinesView | None = None
+            stale_board = False
+            wrong_board = False
+            resync_view: MinesView | None = None
+            err: str | None = None
+            view: MinesView | None = None
+            board_gen = 0
 
+            async with user_lock:
                 async with db_lock:
                     label = await remember_telegram_user(conn, user)
                     session = await get_mines_session(conn, owner_id)
@@ -1867,6 +1925,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                                 else:
                                     if cell in session.opened_set:
                                         err = "__already_open__"
+                                        resync_view = view_for_session(session, label)
                                     else:
                                         if session.message_id != cb_mid:
                                             await set_mines_board_message_id(conn, owner_id, cb_mid)
@@ -1876,34 +1935,50 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                                             user_label=label,
                                             cell=cell,
                                         )
+                    if view is not None or resync_view is not None:
+                        board_gen = _bump_mines_board_gen(owner_id)
 
-                if wrong_board:
-                    try:
-                        await cb.message.reply(
-                            "Это старое поле. Используйте актуальное сообщение своей игры."
-                        )
-                    except Exception:
-                        pass
-                    return
+            if wrong_board:
+                try:
+                    await cb.message.reply(
+                        "Это старое поле. Используйте актуальное сообщение своей игры."
+                    )
+                except Exception:
+                    pass
+                return
 
-                if stale_board:
-                    try:
-                        await cb.message.edit_reply_markup(
-                            reply_markup=InlineKeyboardMarkup(
-                                inline_keyboard=[
-                                    [
-                                        InlineKeyboardButton(
-                                            text="💣 Начать заново",
-                                            callback_data=f"ms:n:{owner_id}:3",
-                                        )
-                                    ]
+            if stale_board:
+                try:
+                    await cb.message.edit_reply_markup(
+                        reply_markup=InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text="💣 Начать заново",
+                                        callback_data=f"ms:n:{owner_id}:3",
+                                    )
                                 ]
-                            )
+                            ]
                         )
-                    except TelegramBadRequest:
-                        pass
-                    return
+                    )
+                except TelegramBadRequest:
+                    pass
+                return
 
+            if resync_view is not None and err != "__already_open__":
+                try:
+                    await _send_mines_view(
+                        cb.message,
+                        resync_view,
+                        owner_id=owner_id,
+                        edit_message=cb.message,
+                        board_gen=board_gen,
+                    )
+                except Exception:
+                    log.exception("mines finished resync failed")
+                return
+
+            if err == "__already_open__":
                 if resync_view is not None:
                     try:
                         await _send_mines_view(
@@ -1911,38 +1986,37 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                             resync_view,
                             owner_id=owner_id,
                             edit_message=cb.message,
+                            board_gen=board_gen,
                         )
                     except Exception:
-                        log.exception("mines finished resync failed")
-                    return
+                        log.debug("mines already-open resync failed", exc_info=True)
+                return
 
-                if err == "__already_open__":
-                    return
+            if err:
+                try:
+                    await cb.message.reply(err.replace("`", "").replace("*", ""))
+                except Exception:
+                    pass
+                return
 
-                if err:
+            if view:
+                try:
+                    await _send_mines_view(
+                        cb.message,
+                        view,
+                        owner_id=owner_id,
+                        edit_message=cb.message,
+                        board_gen=board_gen,
+                    )
+                except Exception:
+                    log.exception("mines view update failed")
                     try:
-                        await cb.message.reply(err.replace("`", "").replace("*", ""))
-                    except Exception:
-                        pass
-                    return
-
-                if view:
-                    try:
-                        await _send_mines_view(
-                            cb.message,
-                            view,
-                            owner_id=owner_id,
-                            edit_message=cb.message,
+                        await cb.message.answer(
+                            view.text,
+                            reply_markup=_mines_keyboard(view, owner_id),
                         )
                     except Exception:
-                        log.exception("mines view update failed")
-                        try:
-                            await cb.message.answer(
-                                view.text,
-                                reply_markup=_mines_keyboard(view, owner_id),
-                            )
-                        except Exception:
-                            log.exception("mines view fallback failed")
+                        log.exception("mines view fallback failed")
         except TelegramForbiddenError:
             log.warning("mines callback: forbidden in chat %s", cb.message.chat.id if cb.message else "?")
             try:

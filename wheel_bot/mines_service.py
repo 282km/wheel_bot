@@ -429,6 +429,12 @@ def build_finished_view(session: MinesSession, user_label: str) -> MinesView:
     )
 
 
+def view_for_session(session: MinesSession, user_label: str) -> MinesView:
+    if session.status == "finished":
+        return build_finished_view(session, user_label)
+    return _view_from_session(session, user_label, finished=False)
+
+
 def _normalize_mine_count(mine_count: int) -> int:
     count = int(mine_count)
     return count if count in ALLOWED_MINES else DEFAULT_MINES
