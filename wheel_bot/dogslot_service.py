@@ -19,7 +19,40 @@ WILD_COLS = (1, 2, 3)
 
 SCATTER = "scatter"
 WILD = "wild"
-PAY_SYMBOLS = ("rottweiler", "pug", "shiba", "bone", "collar")
+PAY_SYMBOLS = ("rottweiler", "shiba", "pug", "collar", "bone")
+
+# Выплаты × ставку на линию (×10 для очков в топе), как в оригинале The Dog House.
+PAYTABLE: dict[str, tuple[int, int, int]] = {
+    "rottweiler": (25, 75, 375),  # 2.5 / 7.5 / 37.5
+    "shiba": (18, 50, 250),       # 1.75 / 5 / 25
+    "pug": (13, 30, 150),         # 1.25 / 3 / 15
+    "collar": (10, 20, 100),      # такса / средний символ: 1 / 2 / 10
+    "bone": (4, 10, 50),          # 0.4 / 1 / 5
+}
+
+# 20 фиксированных линий (5×3), стандартная схема Pragmatic Play.
+PAYLINES: tuple[tuple[tuple[int, int], ...], ...] = (
+    tuple((1, c) for c in range(COLS)),
+    tuple((0, c) for c in range(COLS)),
+    tuple((2, c) for c in range(COLS)),
+    ((0, 0), (1, 1), (2, 2), (1, 3), (0, 4)),
+    ((2, 0), (1, 1), (0, 2), (1, 3), (2, 4)),
+    ((1, 0), (0, 1), (0, 2), (0, 3), (1, 4)),
+    ((1, 0), (2, 1), (2, 2), (2, 3), (1, 4)),
+    ((0, 0), (1, 1), (1, 2), (1, 3), (0, 4)),
+    ((2, 0), (1, 1), (1, 2), (1, 3), (2, 4)),
+    ((1, 0), (1, 1), (0, 2), (1, 3), (1, 4)),
+    ((1, 0), (1, 1), (2, 2), (1, 3), (1, 4)),
+    ((1, 0), (0, 1), (1, 2), (0, 3), (1, 4)),
+    ((1, 0), (2, 1), (1, 2), (2, 3), (1, 4)),
+    ((0, 0), (0, 1), (1, 2), (0, 3), (0, 4)),
+    ((2, 0), (2, 1), (1, 2), (2, 3), (2, 4)),
+    ((0, 0), (1, 1), (0, 2), (1, 3), (0, 4)),
+    ((2, 0), (1, 1), (2, 2), (1, 3), (2, 4)),
+    ((1, 0), (0, 1), (2, 2), (0, 3), (1, 4)),
+    ((1, 0), (2, 1), (0, 2), (2, 3), (1, 4)),
+    ((0, 0), (2, 1), (0, 2), (2, 3), (0, 4)),
+)
 
 SYMBOL_EMOJI = {
     "scatter": "🐾",
@@ -31,20 +64,7 @@ SYMBOL_EMOJI = {
     "collar": "🎀",
 }
 
-PAYTABLE: dict[str, tuple[int, int, int]] = {
-    "rottweiler": (15, 30, 60),
-    "shiba": (15, 30, 60),
-    "pug": (10, 20, 40),
-    "bone": (5, 10, 20),
-    "collar": (5, 10, 20),
-}
-
-PAYLINES: tuple[tuple[tuple[int, int], ...], ...] = (
-    tuple((0, c) for c in range(COLS)),
-    tuple((1, c) for c in range(COLS)),
-    tuple((2, c) for c in range(COLS)),
-)
-
+MAX_WILD_MULT = 9
 MAX_BONUS_POINTS = 500
 
 DOGSLOT_SCHEMA = """
@@ -296,13 +316,13 @@ def _rng() -> secrets.SystemRandom:
     return secrets.SystemRandom()
 
 
-def _spin_column(col: int, rng: secrets.SystemRandom) -> list[Cell]:
+def _spin_column(col: int, rng: secrets.SystemRandom, *, wild_mult: int = 0) -> list[Cell]:
     strip = _BASE_STRIPS[col]
     cells: list[Cell] = []
     for _ in range(ROWS):
         sym = rng.choice(strip)
         if sym == WILD:
-            cells.append(Cell(WILD, rng.choice((2, 3))))
+            cells.append(Cell(WILD, wild_mult or rng.choice((2, 3))))
         elif sym == SCATTER:
             cells.append(Cell(SCATTER))
         else:
@@ -311,7 +331,8 @@ def _spin_column(col: int, rng: secrets.SystemRandom) -> list[Cell]:
 
 
 def _generate_grid(rng: secrets.SystemRandom) -> list[list[Cell]]:
-    cols = [_spin_column(c, rng) for c in range(COLS)]
+    reel_mults = {col: rng.choice((2, 3)) for col in WILD_COLS}
+    cols = [_spin_column(c, rng, wild_mult=reel_mults.get(c, 0)) for c in range(COLS)]
     return [[cols[c][r] for c in range(COLS)] for r in range(ROWS)]
 
 
@@ -371,42 +392,44 @@ def _format_grid(
 
 
 def _line_payout(cells: list[Cell]) -> tuple[int, int]:
-    target: Optional[str] = None
-    for cell in cells:
-        if cell.symbol in PAY_SYMBOLS:
-            target = cell.symbol
-            break
-    if target is None:
-        if sum(1 for c in cells if c.symbol == WILD) >= 3:
-            target = "pug"
-        else:
-            return 0, 0
+    """Слева направо, scatter рвёт линию, wild суммирует ×2/×3 (макс. ×9)."""
+    best_pts = 0
+    best_count = 0
 
-    count = 0
-    mult = 1
-    for cell in cells:
-        if cell.symbol == target or cell.symbol == WILD:
-            count += 1
-            if cell.symbol == WILD and cell.mult > 1:
-                mult *= cell.mult
-        else:
-            break
-    if count < 3:
-        return 0, count
-    pay_idx = min(count, 5) - 3
-    return int(PAYTABLE[target][pay_idx] * mult), count
+    for target in PAY_SYMBOLS:
+        count = 0
+        wild_mult_sum = 0
+        for cell in cells:
+            if cell.symbol == SCATTER:
+                break
+            if cell.symbol == target or cell.symbol == WILD:
+                count += 1
+                if cell.symbol == WILD:
+                    wild_mult_sum += max(2, cell.mult or 2)
+            else:
+                break
+        if count < 3:
+            continue
+        pay_idx = min(count, 5) - 3
+        base = PAYTABLE[target][pay_idx]
+        mult = min(MAX_WILD_MULT, wild_mult_sum) if wild_mult_sum else 1
+        pts = int(base * mult)
+        if pts > best_pts:
+            best_pts = pts
+            best_count = count
+
+    return best_pts, best_count
 
 
 def _score_grid(grid: list[list[Cell]]) -> tuple[int, list[str]]:
     total = 0
     notes: list[str] = []
-    labels = ("верх", "центр", "низ")
     for idx, line in enumerate(PAYLINES):
         cells = [grid[r][c] for r, c in line]
         pts, n = _line_payout(cells)
         if pts > 0:
             total += pts
-            notes.append(f"Линия {labels[idx]}: {n} в ряд → +{pts}")
+            notes.append(f"Линия {idx + 1}: {n} в ряд → +{pts}")
     return total, notes
 
 
