@@ -276,10 +276,17 @@ def _games_subcommand(message: Message) -> str | None:
 def _chat_user_label(user) -> str:
     if not user:
         return "Игрок"
+    parts: list[str] = []
+    if user.first_name:
+        parts.append(str(user.first_name).strip())
+    if user.last_name:
+        parts.append(str(user.last_name).strip())
+    name = " ".join(p for p in parts if p)
+    if name:
+        return name
     if user.username:
         return str(user.username).lstrip("@")
-    name = (user.first_name or "").strip()
-    return name or "Игрок"
+    return "Игрок"
 
 
 def _bonus_user_label(message: Message) -> str:
