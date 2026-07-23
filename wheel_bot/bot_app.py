@@ -263,7 +263,10 @@ def _format_winreport_block(data: dict[str, Any]) -> str:
 
 
 def _first_command_token(text: str) -> str:
-    return text.strip().split(maxsplit=1)[0].split("@")[0].lower()
+    parts = text.strip().split(maxsplit=1)
+    if not parts:
+        return ""
+    return parts[0].split("@")[0].lower()
 
 
 def _is_stat_command(message: Message) -> bool:
