@@ -95,8 +95,14 @@ def _period_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _blackjack_keyboard(owner_id: int) -> InlineKeyboardMarkup:
+def _blackjack_keyboard(owner_id: int, *, finished: bool = False) -> InlineKeyboardMarkup:
     oid = int(owner_id)
+    if finished:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🃏 Раздать заново", callback_data=f"bj:new:{oid}")]
+            ]
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -108,9 +114,18 @@ def _blackjack_keyboard(owner_id: int) -> InlineKeyboardMarkup:
 
 
 def _mines_keyboard(view: MinesView, owner_id: int) -> InlineKeyboardMarkup | None:
-    if view.finished:
-        return None
     oid = int(owner_id)
+    if view.finished:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💣 Начать заново",
+                        callback_data=f"ms:n:{oid}:{view.mine_count}",
+                    )
+                ]
+            ]
+        )
     rows: list[list[InlineKeyboardButton]] = []
     for r in range(GRID_SIZE):
         row: list[InlineKeyboardButton] = []
@@ -872,7 +887,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         edit_message: Message | None = None,
         board_message_id: int | None = None,
     ) -> int | None:
-        markup = None if view.finished else _blackjack_keyboard(owner_id)
+        markup = _blackjack_keyboard(owner_id, finished=view.finished)
         text = view.text
         chat_id = int(message.chat.id)
         result_id: int | None = board_message_id
@@ -897,9 +912,6 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             else:
                 sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
                 result_id = int(sent.message_id)
-                if not view.finished:
-                    async with db_lock:
-                        await set_board_message_id(conn, owner_id, result_id)
         except TelegramBadRequest:
             plain = text.replace("*", "")
             try:
@@ -917,21 +929,15 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 else:
                     sent = await message.answer(plain, reply_markup=markup)
                     result_id = int(sent.message_id)
-                    if not view.finished:
-                        async with db_lock:
-                            await set_board_message_id(conn, owner_id, result_id)
             except TelegramBadRequest:
-                if not view.finished:
-                    sent = await message.answer(plain, reply_markup=markup)
-                    result_id = int(sent.message_id)
-                    async with db_lock:
-                        await set_board_message_id(conn, owner_id, result_id)
-                else:
-                    sent = await message.answer(plain)
-                    result_id = int(sent.message_id)
+                sent = await message.answer(plain, reply_markup=markup)
+                result_id = int(sent.message_id)
 
         if result_id is not None:
             await _remember_blackjack_board(owner_id, chat_id, result_id)
+            if not view.finished:
+                async with db_lock:
+                    await set_board_message_id(conn, owner_id, result_id)
         return result_id
 
     async def _cleanup_mines_messages(
@@ -1034,9 +1040,6 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             else:
                 sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
                 result_id = int(sent.message_id)
-                if not view.finished:
-                    async with db_lock:
-                        await set_mines_board_message_id(conn, owner_id, result_id)
         except TelegramBadRequest:
             plain = text.replace("*", "")
             try:
@@ -1054,21 +1057,15 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 else:
                     sent = await message.answer(plain, reply_markup=markup)
                     result_id = int(sent.message_id)
-                    if not view.finished:
-                        async with db_lock:
-                            await set_mines_board_message_id(conn, owner_id, result_id)
             except TelegramBadRequest:
-                if not view.finished:
-                    sent = await message.answer(plain, reply_markup=markup)
-                    result_id = int(sent.message_id)
-                    async with db_lock:
-                        await set_mines_board_message_id(conn, owner_id, result_id)
-                else:
-                    sent = await message.answer(plain)
-                    result_id = int(sent.message_id)
+                sent = await message.answer(plain, reply_markup=markup)
+                result_id = int(sent.message_id)
 
         if result_id is not None:
             await _remember_mines_board(owner_id, chat_id, result_id)
+            if not view.finished:
+                async with db_lock:
+                    await set_mines_board_message_id(conn, owner_id, result_id)
         return result_id
 
     async def _run_mines_cashout(message: Message, uid: int, label: str) -> None:
@@ -1515,11 +1512,11 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 return
 
             parts = (cb.data or "").split(":")
-            if len(parts) != 3:
+            if len(parts) < 3:
                 await cb.answer("Устаревшие кнопки. Начните /blackjack", show_alert=True)
                 return
             action, owner_raw = parts[1], parts[2]
-            if action not in ("hit", "stand"):
+            if action not in ("hit", "stand", "new"):
                 await cb.answer()
                 return
             try:
@@ -1541,6 +1538,30 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             target_id = _configured_stats_chat_id()
             if int(cb.message.chat.id) != int(target_id):
                 await cb.answer("Кнопки работают только в чате статистики.", show_alert=True)
+                return
+
+            if action == "new":
+                async with db_lock:
+                    label = await remember_telegram_user(conn, user)
+                    err, view = await start_blackjack(
+                        conn,
+                        telegram_id=owner_id,
+                        user_label=label,
+                        chat_id=int(cb.message.chat.id),
+                    )
+                if err:
+                    await cb.answer(err.replace("`", "").replace("*", ""), show_alert=True)
+                    return
+                if not view:
+                    await cb.answer()
+                    return
+                await cb.answer()
+                await _send_blackjack_view(
+                    cb.message,
+                    view,
+                    owner_id=owner_id,
+                    edit_message=cb.message,
+                )
                 return
 
             async with db_lock:
@@ -1676,7 +1697,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 await cb.answer("Устаревшие кнопки. Начните /mines", show_alert=True)
                 return
             action, owner_raw = parts[1], parts[2]
-            if action not in ("o", "c", "x"):
+            if action not in ("o", "c", "x", "n"):
                 await cb.answer()
                 return
             try:
@@ -1702,6 +1723,39 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             target_id = _configured_stats_chat_id()
             if int(cb.message.chat.id) != int(target_id):
                 await cb.answer("Кнопки работают только в чате статистики.", show_alert=True)
+                return
+
+            if action == "n":
+                if len(parts) != 4:
+                    await cb.answer("Устаревшие кнопки. Начните /mines", show_alert=True)
+                    return
+                try:
+                    mine_count = int(parts[3])
+                except ValueError:
+                    await cb.answer("Устаревшие кнопки. Начните /mines", show_alert=True)
+                    return
+                async with db_lock:
+                    label = await remember_telegram_user(conn, user)
+                    err, view = await start_mines(
+                        conn,
+                        telegram_id=owner_id,
+                        user_label=label,
+                        chat_id=int(cb.message.chat.id),
+                        mine_count=mine_count,
+                    )
+                if err:
+                    await cb.answer(err.replace("`", "").replace("*", ""), show_alert=True)
+                    return
+                if not view:
+                    await cb.answer()
+                    return
+                await cb.answer()
+                await _send_mines_view(
+                    cb.message,
+                    view,
+                    owner_id=owner_id,
+                    edit_message=cb.message,
+                )
                 return
 
             async with db_lock:
