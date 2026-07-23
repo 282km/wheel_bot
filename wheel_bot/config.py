@@ -46,6 +46,7 @@ class Settings:
     morning_digest_enabled: bool
     morning_digest_hour: int
     morning_digest_timezone: str
+    mini_games_enabled: bool
 
     @property
     def webapp_url(self) -> str:
@@ -108,7 +109,13 @@ def load_settings() -> Settings:
 
     openai_api_key = os.getenv("OPENAI_API_KEY", "").strip() or None
     openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-    morning_digest_enabled = os.getenv("MORNING_DIGEST_ENABLED", "1").strip().lower() in (
+    morning_digest_enabled = os.getenv("MORNING_DIGEST_ENABLED", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    mini_games_enabled = os.getenv("MINI_GAMES_ENABLED", "0").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -140,4 +147,5 @@ def load_settings() -> Settings:
         morning_digest_enabled=morning_digest_enabled,
         morning_digest_hour=morning_digest_hour,
         morning_digest_timezone=morning_digest_timezone,
+        mini_games_enabled=mini_games_enabled,
     )

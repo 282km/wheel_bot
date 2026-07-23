@@ -20,6 +20,11 @@ from wheel_bot import db
 from wheel_bot.bonus_messages import format_bonus_admin_notify, format_bonus_result
 from wheel_bot.bonus_service import try_daily_bonus
 from wheel_bot.config import Settings
+from wheel_bot.feature_flags import (
+    features_status,
+    mini_games_enabled,
+    set_mini_games_enabled,
+)
 from wheel_bot.game_messages import (
     format_bowling_result,
     format_duel_result,
@@ -410,7 +415,11 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         async with db_lock:
             cfg = await load_morning_digest_config(conn, settings)
         if not cfg.enabled:
-            await message.answer("Утренний дайджест выключен. Включите во вкладке «Админ» в WebApp.")
+            await message.answer(
+                "Утренняя сводка выключена.\n"
+                "Включить (superadmin): /morning_on\n"
+                "Статус: /features"
+            )
             return
         await message.answer("Готовлю пост и отправляю в чат… ~5–20 сек.")
 
@@ -450,15 +459,13 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 "Откройте приложение кнопкой ниже (не по ссылке в браузере).\n"
                 "Статистика — в общем чате: /stat или «Статистика».\n"
                 "Лузеры — /luz.\n"
-                "Бонус удачи — /bonus (раз в сутки в чате статистики).\n"
-                "Мини-игры — /games help (слоты, боулинг, дуэли).",
+                "Бонус удачи — /bonus (раз в сутки в чате статистики).",
                 reply_markup=_admin_webapp_keyboard(settings),
             )
             return
         await message.answer(
             "В общем чате: /stat или «Статистика», /luz — статистика лузеров, "
-            "/bonus — попытка удачи раз в сутки.\n"
-            "Мини-игры: /games help"
+            "/bonus — попытка удачи раз в сутки."
         )
 
     @router.message(Command("app", "webapp"))
@@ -677,10 +684,104 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         except TelegramBadRequest:
             await message.reply(text.replace("*", ""))
 
+    async def _user_role(telegram_id: int) -> str:
+        async with db_lock:
+            return await db.ensure_user(conn, telegram_id)
+
+    async def _require_superadmin_private(message: Message) -> bool:
+        if message.chat.type != "private":
+            await message.answer("Команда только в личке с ботом (superadmin).")
+            return False
+        tg_id = message.from_user.id if message.from_user else 0
+        role = await _user_role(tg_id)
+        if role != "superadmin":
+            await message.answer("Команда только для superadmin.")
+            return False
+        return True
+
+    @router.message(Command("features"))
+    async def features_cmd(message: Message) -> None:
+        if not await _require_superadmin_private(message):
+            return
+        async with db_lock:
+            st = await features_status(conn, settings)
+        games = "✅ включены" if st["games"] else "❌ выключены"
+        morning = "✅ включена" if st["morning"] else "❌ выключена"
+        await message.answer(
+            "⚙️ Функции бота\n\n"
+            f"🎮 Мини-игры: {games}\n"
+            f"☀️ Утренняя сводка: {morning}\n\n"
+            "Включить:\n"
+            "/games_on — мини-игры\n"
+            "/morning_on — утро в 8:00 (час в WebApp)\n\n"
+            "Выключить:\n"
+            "/games_off · /morning_off"
+        )
+
+    @router.message(Command("games_on"))
+    async def games_on_cmd(message: Message) -> None:
+        if not await _require_superadmin_private(message):
+            return
+        async with db_lock:
+            await set_mini_games_enabled(conn, True)
+        await message.answer(
+            "🎮 Мини-игры включены.\n"
+            "В чате: /games help · /games_welcome — инструкция для всех."
+        )
+
+    @router.message(Command("games_off"))
+    async def games_off_cmd(message: Message) -> None:
+        if not await _require_superadmin_private(message):
+            return
+        async with db_lock:
+            await set_mini_games_enabled(conn, False)
+        await message.answer("🎮 Мини-игры выключены.")
+
+    @router.message(Command("morning_on"))
+    async def morning_on_cmd(message: Message) -> None:
+        if not await _require_superadmin_private(message):
+            return
+        from wheel_bot.morning_digest_settings import save_morning_digest_settings
+
+        async with db_lock:
+            cfg = await save_morning_digest_settings(conn, settings, enabled=True)
+        await message.answer(
+            f"☀️ Утренняя сводка включена ({cfg.hour}:00 {cfg.timezone}).\n"
+            "Тест: /morning_test · Принудительно в чат: /morning_send"
+        )
+
+    @router.message(Command("morning_off"))
+    async def morning_off_cmd(message: Message) -> None:
+        if not await _require_superadmin_private(message):
+            return
+        from wheel_bot.morning_digest_settings import save_morning_digest_settings
+
+        async with db_lock:
+            await save_morning_digest_settings(conn, settings, enabled=False)
+        await message.answer("☀️ Утренняя сводка выключена.")
+
+    async def _require_mini_games(message: Message) -> bool:
+        async with db_lock:
+            enabled = await mini_games_enabled(conn, settings)
+        if enabled:
+            return True
+        tg_id = message.from_user.id if message.from_user else 0
+        role = await _user_role(tg_id)
+        if role == "superadmin":
+            await message.reply(
+                "🎮 Мини-игры выключены.\n"
+                "Включить в личке: /games_on"
+            )
+        else:
+            await message.reply("🎮 Мини-игры сейчас выключены.")
+        return False
+
     @router.message(lambda message: _is_games_command(message))
     async def games_cmd(message: Message) -> None:
         try:
             if not await _require_stats_group(message, "/games"):
+                return
+            if not await _require_mini_games(message):
                 return
             user = message.from_user
             if not user or user.is_bot:
@@ -715,6 +816,12 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             if role != "superadmin":
                 await message.answer("Команда только для superadmin.")
                 return
+            async with db_lock:
+                if not await mini_games_enabled(conn, settings):
+                    await message.answer(
+                        "Мини-игры выключены. Сначала: /games_on"
+                    )
+                    return
             if message.chat.type == "private":
                 target_id = _configured_stats_chat_id()
                 await message.bot.send_message(
@@ -735,6 +842,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     async def slots_cmd(message: Message) -> None:
         try:
             if not await _require_stats_group(message, "/slots"):
+                return
+            if not await _require_mini_games(message):
                 return
             user = message.from_user
             if not user or user.is_bot:
@@ -782,6 +891,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         try:
             if not await _require_stats_group(message, "/bowling"):
                 return
+            if not await _require_mini_games(message):
+                return
             user = message.from_user
             if not user or user.is_bot:
                 return
@@ -827,6 +938,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     async def duel_cmd(message: Message) -> None:
         try:
             if not await _require_stats_group(message, "/duel"):
+                return
+            if not await _require_mini_games(message):
                 return
             user = message.from_user
             if not user or user.is_bot:
