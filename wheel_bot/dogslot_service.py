@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS dogslot_ui (
 _BASE_STRIPS: dict[int, tuple[str, ...]] = {
     0: ("rottweiler", "pug", "shiba", "bone", "collar", "scatter", "rottweiler", "pug", "bone"),
     1: ("rottweiler", "pug", "wild", "bone", "collar", "shiba", "wild", "pug", "bone"),
-    2: ("shiba", "rottweiler", "wild", "pug", "collar", "wild", "bone", "pug", "shiba"),
+    2: ("shiba", "rottweiler", "wild", "pug", "collar", "scatter", "wild", "bone", "pug"),
     3: ("pug", "shiba", "wild", "rottweiler", "bone", "wild", "collar", "pug", "bone"),
     4: ("collar", "bone", "pug", "scatter", "shiba", "rottweiler", "scatter", "pug", "bone"),
 }
