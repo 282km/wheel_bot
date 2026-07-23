@@ -212,10 +212,10 @@ async def weekly_summary(
     ).fetchone()
 
     summary = {
-        "total_games": int(stats_row["total_games"]) if stats_row else 0,
-        "unique_players": int(stats_row["unique_players"]) if stats_row else 0,
-        "naturals": int(stats_row["naturals"]) if stats_row else 0,
-        "wins": int(stats_row["wins"]) if stats_row else 0,
+        "total_games": int(stats_row["total_games"] or 0) if stats_row else 0,
+        "unique_players": int(stats_row["unique_players"] or 0) if stats_row else 0,
+        "naturals": int(stats_row["naturals"] or 0) if stats_row else 0,
+        "wins": int(stats_row["wins"] or 0) if stats_row else 0,
     }
 
     viewer: Optional[dict[str, Any]] = None
