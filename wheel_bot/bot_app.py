@@ -22,6 +22,7 @@ from wheel_bot.bonus_service import try_daily_bonus
 from wheel_bot.blackjack_service import (
     BlackjackUiState,
     BlackjackView,
+    clear_session,
     get_session,
     get_ui_state,
     hit_blackjack,
@@ -29,7 +30,19 @@ from wheel_bot.blackjack_service import (
     set_board_message_id,
     stand_blackjack,
     start_blackjack,
-    clear_session,
+)
+from wheel_bot.mines_service import (
+    GRID_SIZE,
+    MinesUiState,
+    MinesView,
+    cashout_mines,
+    clear_session as clear_mines_session,
+    get_session as get_mines_session,
+    get_ui_state as get_mines_ui_state,
+    open_mines_cell,
+    save_ui_state as save_mines_ui_state,
+    set_board_message_id as set_mines_board_message_id,
+    start_mines,
 )
 from wheel_bot.config import Settings
 from wheel_bot.feature_flags import (
@@ -81,6 +94,32 @@ def _blackjack_keyboard(owner_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def _mines_keyboard(view: MinesView, owner_id: int) -> InlineKeyboardMarkup | None:
+    if view.finished:
+        return None
+    oid = int(owner_id)
+    rows: list[list[InlineKeyboardButton]] = []
+    for r in range(GRID_SIZE):
+        row: list[InlineKeyboardButton] = []
+        for c in range(GRID_SIZE):
+            idx = r * GRID_SIZE + c
+            if idx in view.opened:
+                row.append(InlineKeyboardButton(text="💎", callback_data=f"ms:x:{oid}:{idx}"))
+            else:
+                row.append(InlineKeyboardButton(text="⬜", callback_data=f"ms:o:{oid}:{idx}"))
+        rows.append(row)
+    if view.can_cashout:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"💰 Забрать ×{view.multiplier:.2f}",
+                    callback_data=f"ms:c:{oid}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _fmt_money(x: float) -> str:
@@ -259,6 +298,32 @@ def _is_stand_command(message: Message) -> bool:
     if not message.text:
         return False
     return _first_command_token(message.text) == "/stand"
+
+
+def _is_mines_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    token = _first_command_token(message.text)
+    return token in ("/mines", "/min")
+
+
+def _is_cash_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/cash"
+
+
+def _mines_mine_count(message: Message) -> int:
+    if not message.text:
+        return 3
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return 3
+    try:
+        count = int(parts[1].strip())
+    except ValueError:
+        return 3
+    return count if count in (3, 5, 10) else 3
 
 
 def _games_subcommand(message: Message) -> str | None:
@@ -827,6 +892,163 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             await _remember_blackjack_board(owner_id, chat_id, result_id)
         return result_id
 
+    async def _cleanup_mines_messages(
+        bot,
+        telegram_id: int,
+        chat_id: int,
+    ) -> None:
+        async with db_lock:
+            ui = await get_mines_ui_state(conn, int(telegram_id))
+            session = await get_mines_session(conn, int(telegram_id))
+            if session is not None:
+                await clear_mines_session(conn, int(telegram_id))
+
+        to_delete: list[int] = []
+        if ui:
+            if ui.board_message_id is not None:
+                to_delete.append(int(ui.board_message_id))
+            if ui.command_message_id is not None:
+                to_delete.append(int(ui.command_message_id))
+        if session and session.message_id is not None:
+            mid = int(session.message_id)
+            if mid not in to_delete:
+                to_delete.append(mid)
+
+        for mid in to_delete:
+            try:
+                await bot.delete_message(chat_id=int(chat_id), message_id=mid)
+            except TelegramBadRequest:
+                pass
+            except Exception:
+                log.debug("mines cleanup delete failed chat=%s msg=%s", chat_id, mid, exc_info=True)
+
+        async with db_lock:
+            await save_mines_ui_state(
+                conn,
+                MinesUiState(telegram_id=int(telegram_id), chat_id=int(chat_id)),
+            )
+
+    async def _remember_mines_command(
+        telegram_id: int,
+        chat_id: int,
+        command_message_id: int,
+    ) -> None:
+        async with db_lock:
+            ui = await get_mines_ui_state(conn, int(telegram_id))
+            await save_mines_ui_state(
+                conn,
+                MinesUiState(
+                    telegram_id=int(telegram_id),
+                    chat_id=int(chat_id),
+                    board_message_id=ui.board_message_id if ui else None,
+                    command_message_id=int(command_message_id),
+                ),
+            )
+
+    async def _remember_mines_board(telegram_id: int, chat_id: int, board_message_id: int) -> None:
+        async with db_lock:
+            ui = await get_mines_ui_state(conn, int(telegram_id))
+            cmd_mid = ui.command_message_id if ui else None
+            await save_mines_ui_state(
+                conn,
+                MinesUiState(
+                    telegram_id=int(telegram_id),
+                    chat_id=int(chat_id),
+                    board_message_id=int(board_message_id),
+                    command_message_id=cmd_mid,
+                ),
+            )
+
+    async def _send_mines_view(
+        message: Message,
+        view: MinesView,
+        *,
+        owner_id: int,
+        edit_message: Message | None = None,
+        board_message_id: int | None = None,
+    ) -> int | None:
+        markup = _mines_keyboard(view, owner_id)
+        text = view.text
+        chat_id = int(message.chat.id)
+        result_id: int | None = board_message_id
+
+        async def _apply_edit(target_message_id: int) -> None:
+            nonlocal result_id
+            await message.bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=target_message_id,
+                parse_mode="Markdown",
+                reply_markup=markup,
+            )
+            result_id = target_message_id
+
+        try:
+            if edit_message is not None:
+                await edit_message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+                result_id = int(edit_message.message_id)
+            elif board_message_id is not None:
+                await _apply_edit(board_message_id)
+            else:
+                sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
+                result_id = int(sent.message_id)
+                if not view.finished:
+                    async with db_lock:
+                        await set_mines_board_message_id(conn, owner_id, result_id)
+        except TelegramBadRequest:
+            plain = text.replace("*", "")
+            try:
+                if edit_message is not None:
+                    await edit_message.edit_text(plain, reply_markup=markup)
+                    result_id = int(edit_message.message_id)
+                elif board_message_id is not None:
+                    await message.bot.edit_message_text(
+                        plain,
+                        chat_id=chat_id,
+                        message_id=board_message_id,
+                        reply_markup=markup,
+                    )
+                    result_id = board_message_id
+                else:
+                    sent = await message.answer(plain, reply_markup=markup)
+                    result_id = int(sent.message_id)
+                    if not view.finished:
+                        async with db_lock:
+                            await set_mines_board_message_id(conn, owner_id, result_id)
+            except TelegramBadRequest:
+                if not view.finished:
+                    sent = await message.answer(plain, reply_markup=markup)
+                    result_id = int(sent.message_id)
+                    async with db_lock:
+                        await set_mines_board_message_id(conn, owner_id, result_id)
+                else:
+                    sent = await message.answer(plain)
+                    result_id = int(sent.message_id)
+
+        if result_id is not None:
+            await _remember_mines_board(owner_id, chat_id, result_id)
+        return result_id
+
+    async def _run_mines_cashout(message: Message, uid: int, label: str) -> None:
+        async with db_lock:
+            session = await get_mines_session(conn, uid)
+            board_mid = session.message_id if session else None
+            err, view = await cashout_mines(
+                conn,
+                telegram_id=uid,
+                user_label=label,
+            )
+        if err:
+            await _reply_md(message, err)
+            return
+        if view:
+            await _send_mines_view(
+                message,
+                view,
+                owner_id=uid,
+                board_message_id=board_mid,
+            )
+
     async def _user_role(telegram_id: int) -> str:
         async with db_lock:
             return await db.ensure_user(conn, telegram_id)
@@ -852,10 +1074,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         morning = "✅ включена" if st["morning"] else "❌ выключена"
         await message.answer(
             "⚙️ Функции бота\n\n"
-            f"🃏 Блэкджек: {games}\n"
+            f"🎮 Мини-игры (BJ + мины): {games}\n"
             f"☀️ Утренняя сводка: {morning}\n\n"
             "Включить:\n"
-            "/games_on — блэкджек\n"
+            "/games_on — блэкджек и мины\n"
             "/morning_on — утро в 8:00 (час в WebApp)\n\n"
             "Выключить:\n"
             "/games_off · /morning_off"
@@ -868,8 +1090,9 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         async with db_lock:
             await set_mini_games_enabled(conn, True)
         await message.answer(
-            "🃏 Блэкджек включён.\n"
-            "В чате: /games help · /games_welcome — инструкция для всех."
+            "🎮 Мини-игры включены (блэкджек + мины).\n"
+            "В чате: /games help · /games_welcome — инструкция для всех.\n"
+            "🃏 /blackjack · 💣 /mines"
         )
 
     @router.message(Command("games_off"))
@@ -878,7 +1101,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             return
         async with db_lock:
             await set_mini_games_enabled(conn, False)
-        await message.answer("🃏 Блэкджек выключен.")
+        await message.answer("🎮 Мини-игры выключены.")
 
     @router.message(Command("morning_on"))
     async def morning_on_cmd(message: Message) -> None:
@@ -912,11 +1135,11 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         role = await _user_role(tg_id)
         if role == "superadmin":
             await message.reply(
-                "🃏 Блэкджек выключен.\n"
+                "🎮 Мини-игры выключены.\n"
                 "Включить в личке: /games_on"
             )
         else:
-            await message.reply("🃏 Блэкджек сейчас выключен.")
+            await message.reply("🎮 Мини-игры сейчас выключены.")
         return False
 
     @router.message(lambda message: _is_games_command(message))
@@ -964,7 +1187,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             async with db_lock:
                 if not await mini_games_enabled(conn, settings):
                     await message.answer(
-                        "Блэкджек выключен. Сначала: /games_on"
+                        "Блэкджек и мины выключены. Сначала: /games_on"
                     )
                     return
             if message.chat.type == "private":
@@ -1139,7 +1362,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             if not enabled:
                 role = await _user_role(int(user.id))
                 if role != "superadmin":
-                    await cb.answer("Блэкджек выключен.", show_alert=True)
+                    await cb.answer("Мини-игры выключены.", show_alert=True)
                     return
             target_id = _configured_stats_chat_id()
             if int(cb.message.chat.id) != int(target_id):
@@ -1194,6 +1417,176 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             log.exception("blackjack callback failed")
             try:
                 await cb.answer("Ошибка. Попробуйте /blackjack", show_alert=True)
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_mines_command(message))
+    async def mines_cmd(message: Message) -> None:
+        try:
+            if not await _require_stats_group(message, "/mines"):
+                return
+            if not await _require_mini_games(message):
+                return
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            uid = int(user.id)
+            chat_id = int(message.chat.id)
+            mine_count = _mines_mine_count(message)
+            async with db_lock:
+                label = await remember_telegram_user(conn, user)
+            await _cleanup_mines_messages(message.bot, uid, chat_id)
+            async with db_lock:
+                err, view = await start_mines(
+                    conn,
+                    telegram_id=uid,
+                    user_label=label,
+                    chat_id=chat_id,
+                    mine_count=mine_count,
+                )
+            if err:
+                await _reply_md(message, err)
+                return
+            if view:
+                await _send_mines_view(message, view, owner_id=uid)
+                await _remember_mines_command(uid, chat_id, int(message.message_id))
+        except TelegramForbiddenError:
+            log.warning("mines: forbidden in chat %s", message.chat.id)
+        except Exception:
+            log.exception("mines handler failed")
+            try:
+                await message.answer("Ошибка /mines. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_cash_command(message))
+    async def cash_cmd(message: Message) -> None:
+        try:
+            if not await _require_stats_group(message, "/cash"):
+                return
+            if not await _require_mini_games(message):
+                return
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            uid = int(user.id)
+            async with db_lock:
+                label = await remember_telegram_user(conn, user)
+            await _run_mines_cashout(message, uid, label)
+            try:
+                await message.bot.delete_message(chat_id=int(message.chat.id), message_id=int(message.message_id))
+            except TelegramBadRequest:
+                pass
+        except TelegramForbiddenError:
+            log.warning("cash: forbidden in chat %s", message.chat.id)
+        except Exception:
+            log.exception("cash handler failed")
+            try:
+                await message.answer("Ошибка /cash. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
+
+    @router.callback_query(F.data.startswith("ms:"))
+    async def mines_callback(cb: CallbackQuery) -> None:
+        try:
+            user = cb.from_user
+            if not user or user.is_bot:
+                await cb.answer()
+                return
+            if not cb.message:
+                await cb.answer()
+                return
+
+            parts = (cb.data or "").split(":")
+            if len(parts) < 3:
+                await cb.answer("Устаревшие кнопки. Начните /mines", show_alert=True)
+                return
+            action, owner_raw = parts[1], parts[2]
+            if action not in ("o", "c", "x"):
+                await cb.answer()
+                return
+            try:
+                owner_id = int(owner_raw)
+            except ValueError:
+                await cb.answer("Устаревшие кнопки. Начните /mines", show_alert=True)
+                return
+            if int(user.id) != owner_id:
+                await cb.answer("Это игра другого игрока.", show_alert=True)
+                return
+
+            if action == "x":
+                await cb.answer("Клетка уже открыта.")
+                return
+
+            async with db_lock:
+                enabled = await mini_games_enabled(conn, settings)
+            if not enabled:
+                role = await _user_role(int(user.id))
+                if role != "superadmin":
+                    await cb.answer("Мини-игры выключены.", show_alert=True)
+                    return
+            target_id = _configured_stats_chat_id()
+            if int(cb.message.chat.id) != int(target_id):
+                await cb.answer("Кнопки работают только в чате статистики.", show_alert=True)
+                return
+
+            async with db_lock:
+                label = await remember_telegram_user(conn, user)
+                session = await get_mines_session(conn, owner_id)
+                if session is None:
+                    await cb.answer("Игра уже завершена.", show_alert=True)
+                    return
+                if session.message_id and cb.message.message_id != session.message_id:
+                    await cb.answer(
+                        "Это старое поле. Используйте актуальное сообщение своей игры.",
+                        show_alert=True,
+                    )
+                    return
+                if int(session.chat_id) != int(cb.message.chat.id):
+                    await cb.answer("Игра привязана к другому чату.", show_alert=True)
+                    return
+                if action == "c":
+                    err, view = await cashout_mines(
+                        conn,
+                        telegram_id=owner_id,
+                        user_label=label,
+                    )
+                else:
+                    if len(parts) != 4:
+                        await cb.answer("Устаревшие кнопки.", show_alert=True)
+                        return
+                    try:
+                        cell = int(parts[3])
+                    except ValueError:
+                        await cb.answer("Устаревшие кнопки.", show_alert=True)
+                        return
+                    err, view = await open_mines_cell(
+                        conn,
+                        telegram_id=owner_id,
+                        user_label=label,
+                        cell=cell,
+                    )
+
+            if err:
+                await cb.answer(err.replace("`", "").replace("*", ""), show_alert=True)
+                return
+            if not view:
+                await cb.answer()
+                return
+            await cb.answer()
+            await _send_mines_view(
+                cb.message,
+                view,
+                owner_id=owner_id,
+                edit_message=cb.message,
+            )
+        except TelegramForbiddenError:
+            log.warning("mines callback: forbidden in chat %s", cb.message.chat.id if cb.message else "?")
+            await cb.answer()
+        except Exception:
+            log.exception("mines callback failed")
+            try:
+                await cb.answer("Ошибка. Попробуйте /mines", show_alert=True)
             except Exception:
                 pass
 

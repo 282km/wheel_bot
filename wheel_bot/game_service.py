@@ -10,7 +10,10 @@ from wheel_bot.db import utc_now_iso
 from wheel_bot.timezones import get_timezone
 from wheel_bot.user_labels import resolve_player_label
 
-GameType = Literal["blackjack"]
+GameType = Literal["blackjack", "mines"]
+
+MINI_GAME_TYPES = ("blackjack", "mines")
+MINI_GAME_TYPES_SQL = "('blackjack', 'mines')"
 
 
 GAME_SCHEMA = """
@@ -33,8 +36,10 @@ async def ensure_game_schema(conn: aiosqlite.Connection) -> None:
     await conn.executescript(GAME_SCHEMA)
     await _migrate_game_plays(conn)
     from wheel_bot.blackjack_service import ensure_blackjack_schema
+    from wheel_bot.mines_service import ensure_mines_schema
 
     await ensure_blackjack_schema(conn)
+    await ensure_mines_schema(conn)
     await conn.commit()
 
 
@@ -122,7 +127,7 @@ async def _weekly_rank_map(
         SELECT telegram_id, SUM(points) AS pts, COUNT(*) AS games
         FROM game_plays
         WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
-          AND game_type = 'blackjack'
+          AND game_type IN ('blackjack', 'mines')
         GROUP BY telegram_id
         ORDER BY pts DESC, games DESC, telegram_id ASC
         """,
@@ -165,7 +170,7 @@ async def weekly_summary(
             COUNT(*) AS games
         FROM game_plays g
         WHERE datetime(g.played_at) >= datetime(?) AND datetime(g.played_at) < datetime(?)
-          AND g.game_type = 'blackjack'
+          AND g.game_type IN ('blackjack', 'mines')
         GROUP BY g.telegram_id
         ORDER BY points DESC, games DESC, g.telegram_id ASC
         LIMIT {int(top_limit)}
@@ -190,11 +195,12 @@ async def weekly_summary(
             SELECT
                 COUNT(*) AS total_games,
                 COUNT(DISTINCT telegram_id) AS unique_players,
-                SUM(CASE WHEN points = 70 THEN 1 ELSE 0 END) AS naturals,
-                SUM(CASE WHEN points IN (40, 70) THEN 1 ELSE 0 END) AS wins
+                SUM(CASE WHEN game_type = 'blackjack' AND points = 70 THEN 1 ELSE 0 END) AS naturals,
+                SUM(CASE WHEN game_type = 'blackjack' AND points IN (40, 70) THEN 1 ELSE 0 END) AS bj_wins,
+                SUM(CASE WHEN game_type = 'mines' AND points >= 10 THEN 1 ELSE 0 END) AS mines_wins
             FROM game_plays
             WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
-              AND game_type = 'blackjack'
+              AND game_type IN ('blackjack', 'mines')
             """,
             week_params,
         )
@@ -204,7 +210,8 @@ async def weekly_summary(
         "total_games": int(stats_row["total_games"] or 0) if stats_row else 0,
         "unique_players": int(stats_row["unique_players"] or 0) if stats_row else 0,
         "naturals": int(stats_row["naturals"] or 0) if stats_row else 0,
-        "wins": int(stats_row["wins"] or 0) if stats_row else 0,
+        "bj_wins": int(stats_row["bj_wins"] or 0) if stats_row else 0,
+        "mines_wins": int(stats_row["mines_wins"] or 0) if stats_row else 0,
     }
 
     viewer: Optional[dict[str, Any]] = None
@@ -234,10 +241,14 @@ async def user_week_stats(
             SELECT
                 SUM(points) AS total_points,
                 COUNT(*) AS games,
-                SUM(CASE WHEN points = 70 THEN 1 ELSE 0 END) AS naturals
+                SUM(CASE WHEN game_type = 'blackjack' THEN 1 ELSE 0 END) AS bj_games,
+                SUM(CASE WHEN game_type = 'mines' THEN 1 ELSE 0 END) AS mines_games,
+                SUM(CASE WHEN game_type = 'blackjack' THEN points ELSE 0 END) AS bj_points,
+                SUM(CASE WHEN game_type = 'mines' THEN points ELSE 0 END) AS mines_points,
+                SUM(CASE WHEN game_type = 'blackjack' AND points = 70 THEN 1 ELSE 0 END) AS naturals
             FROM game_plays
             WHERE telegram_id = ? AND datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
-              AND game_type = 'blackjack'
+              AND game_type IN ('blackjack', 'mines')
             """,
             params,
         )
@@ -247,8 +258,13 @@ async def user_week_stats(
     week = {
         "total_points": int(row["total_points"] or 0) if row else 0,
         "games": int(row["games"] or 0) if row else 0,
+        "bj_games": int(row["bj_games"] or 0) if row else 0,
+        "mines_games": int(row["mines_games"] or 0) if row else 0,
+        "bj_points": int(row["bj_points"] or 0) if row else 0,
+        "mines_points": int(row["mines_points"] or 0) if row else 0,
         "naturals": int(row["naturals"] or 0) if row else 0,
-        "wins": 0,
+        "bj_wins": 0,
+        "mines_cashouts": 0,
         "rank": 0,
     }
 
@@ -267,12 +283,29 @@ async def user_week_stats(
             continue
         outcome = str(bmeta.get("outcome") or "")
         if outcome in ("win", "blackjack"):
-            week["wins"] += 1
+            week["bj_wins"] += 1
+
+    mines_cur = await conn.execute(
+        """
+        SELECT meta_json FROM game_plays
+        WHERE telegram_id = ? AND game_type = 'mines'
+          AND datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
+        """,
+        params,
+    )
+    for mrow in await mines_cur.fetchall():
+        try:
+            mmeta = json.loads(str(mrow["meta_json"] or "{}"))
+        except json.JSONDecodeError:
+            continue
+        outcome = str(mmeta.get("outcome") or "")
+        if outcome in ("cashout", "perfect"):
+            week["mines_cashouts"] += 1
 
     rank = await get_user_rank(conn, telegram_id, when=when)
     week["rank"] = rank or 0
 
-    best_row = await (
+    best_bj = await (
         await conn.execute(
             """
             SELECT points FROM game_plays
@@ -283,13 +316,32 @@ async def user_week_stats(
             (int(telegram_id),),
         )
     ).fetchone()
-    best: Optional[str] = None
-    if best_row:
-        pts = int(best_row["points"])
+    best_mines = await (
+        await conn.execute(
+            """
+            SELECT points, meta_json FROM game_plays
+            WHERE telegram_id = ? AND game_type = 'mines'
+            ORDER BY points DESC, played_at DESC
+            LIMIT 1
+            """,
+            (int(telegram_id),),
+        )
+    ).fetchone()
+    best: list[str] = []
+    if best_bj:
+        pts = int(best_bj["points"])
         if pts >= 70:
-            best = f"🃏 BLACKJACK (+{pts} очков)"
+            best.append(f"🃏 BLACKJACK (+{pts} очков)")
         else:
-            best = f"🃏 блэкджек (+{pts} очков)"
+            best.append(f"🃏 блэкджек (+{pts} очков)")
+    if best_mines:
+        pts = int(best_mines["points"])
+        try:
+            mmeta = json.loads(str(best_mines["meta_json"] or "{}"))
+            mult = float(mmeta.get("multiplier") or 0)
+            best.append(f"💣 мины ×{mult:.2f} (+{pts} очков)")
+        except (json.JSONDecodeError, TypeError, ValueError):
+            best.append(f"💣 мины (+{pts} очков)")
 
     return {
         "label": label,
@@ -306,7 +358,7 @@ async def format_morning_games_digest(
     *,
     when: Optional[datetime] = None,
 ) -> str:
-    """Утренний пост: топ блэкджека за неделю."""
+    """Утренний пост: топ мини-игр за неделю."""
     tz = get_timezone("Europe/Moscow")
     ref = (when or datetime.now(timezone.utc)).astimezone(tz)
     _, _, current_label = week_bounds(ref)
@@ -314,10 +366,10 @@ async def format_morning_games_digest(
     if ref.weekday() == 0:
         prev_when = ref - timedelta(days=1)
         data = await weekly_summary(conn, when=prev_when, top_limit=5)
-        title = f"☀️ Доброе утро, покерная братва!\n\n🃏 Блэкджек — итоги прошлой недели ({data['period_label']})"
+        title = f"☀️ Доброе утро, покерная братва!\n\n🎮 Мини-игры — итоги прошлой недели ({data['period_label']})"
     else:
         data = await weekly_summary(conn, when=ref, top_limit=5)
-        title = f"☀️ Доброе утро, покерная братва!\n\n🃏 Блэкджек — топ недели ({current_label})"
+        title = f"☀️ Доброе утро, покерная братва!\n\n🎮 Мини-игры — топ недели ({current_label})"
 
     lines = [title, ""]
     top = data.get("top") or []
@@ -326,7 +378,7 @@ async def format_morning_games_digest(
             [
                 "Пока никто не играл — самое время начать!",
                 "",
-                "🃏 `/blackjack` · 📖 `/games help`",
+                "🃏 `/blackjack` · 💣 `/mines` · 📖 `/games help`",
             ]
         )
     else:
@@ -341,7 +393,8 @@ async def format_morning_games_digest(
                 f"📊 Партий: {summary.get('total_games', 0)} · "
                 f"Игроков: {summary.get('unique_players', 0)} · "
                 f"🃏 натуральных 21: {summary.get('naturals', 0)} · "
-                f"побед: {summary.get('wins', 0)}",
+                f"побед BJ: {summary.get('bj_wins', 0)} · "
+                f"кэшаутов мин: {summary.get('mines_wins', 0)}",
             ]
         )
 
