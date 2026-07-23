@@ -3,13 +3,12 @@ from __future__ import annotations
 import json
 import secrets
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import aiosqlite
 
 from wheel_bot.db import utc_now_iso
 from wheel_bot.game_service import get_user_rank, record_play
-from wheel_bot.user_labels import escape_markdown
 
 Outcome = Literal["cashout", "bust", "perfect"]
 
@@ -29,6 +28,8 @@ CREATE TABLE IF NOT EXISTS mines_sessions (
     mine_count INTEGER NOT NULL,
     mines_json TEXT NOT NULL,
     opened_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'active',
+    result_json TEXT,
     updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS mines_ui (
@@ -45,6 +46,12 @@ async def _migrate_mines_sessions(conn: aiosqlite.Connection) -> None:
     cols = {str(row[1]) for row in await cur.fetchall()}
     if cols and "message_id" not in cols:
         await conn.execute("ALTER TABLE mines_sessions ADD COLUMN message_id INTEGER")
+    if cols and "status" not in cols:
+        await conn.execute(
+            "ALTER TABLE mines_sessions ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+        )
+    if cols and "result_json" not in cols:
+        await conn.execute("ALTER TABLE mines_sessions ADD COLUMN result_json TEXT")
 
 
 async def ensure_mines_schema(conn: aiosqlite.Connection) -> None:
@@ -101,6 +108,8 @@ class MinesSession:
     mines: list[int]
     opened: list[int]
     message_id: Optional[int] = None
+    status: str = "active"
+    result: Optional[dict[str, Any]] = None
 
     @property
     def mine_set(self) -> set[int]:
@@ -178,6 +187,10 @@ async def get_session(conn: aiosqlite.Connection, telegram_id: int) -> Optional[
     ).fetchone()
     if not row:
         return None
+    try:
+        result = json.loads(str(row["result_json"] or "")) if row["result_json"] else None
+    except json.JSONDecodeError:
+        result = None
     return MinesSession(
         telegram_id=int(row["telegram_id"]),
         user_label=str(row["user_label"]),
@@ -186,6 +199,8 @@ async def get_session(conn: aiosqlite.Connection, telegram_id: int) -> Optional[
         mines=json.loads(str(row["mines_json"])),
         opened=json.loads(str(row["opened_json"] or "[]")),
         message_id=int(row["message_id"]) if row["message_id"] is not None else None,
+        status=str(row["status"] or "active"),
+        result=result if isinstance(result, dict) else None,
     )
 
 
@@ -193,8 +208,8 @@ async def save_session(conn: aiosqlite.Connection, session: MinesSession) -> Non
     await conn.execute(
         """
         INSERT INTO mines_sessions
-            (telegram_id, user_label, chat_id, message_id, mine_count, mines_json, opened_json, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (telegram_id, user_label, chat_id, message_id, mine_count, mines_json, opened_json, status, result_json, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(telegram_id) DO UPDATE SET
             user_label = excluded.user_label,
             chat_id = excluded.chat_id,
@@ -202,6 +217,8 @@ async def save_session(conn: aiosqlite.Connection, session: MinesSession) -> Non
             mine_count = excluded.mine_count,
             mines_json = excluded.mines_json,
             opened_json = excluded.opened_json,
+            status = excluded.status,
+            result_json = excluded.result_json,
             updated_at = excluded.updated_at
         """,
         (
@@ -212,6 +229,8 @@ async def save_session(conn: aiosqlite.Connection, session: MinesSession) -> Non
             session.mine_count,
             json.dumps(session.mines, ensure_ascii=False),
             json.dumps(session.opened, ensure_ascii=False),
+            session.status,
+            json.dumps(session.result, ensure_ascii=False) if session.result else None,
             utc_now_iso(),
         ),
     )
@@ -262,16 +281,15 @@ def _opened_safe_count(session: MinesSession) -> int:
 def _format_active(session: MinesSession, user_label: str) -> str:
     opened_safe = _opened_safe_count(session)
     mult = multiplier_for(session.mine_count, opened_safe)
-    who = escape_markdown(user_label)
     lines = [
-        f"💣 *Мины* — {who}",
+        f"💣 Мины — {user_label}",
         "",
         f"{session.mine_count} мины · открыто {opened_safe} · ×{mult:.2f}",
         "",
         _format_grid(session, reveal_mines=False),
         "",
         "Открывайте ⬜ — или заберите выигрыш кнопкой 💰",
-        f"👆 Кнопки ниже — только для {who}",
+        f"👆 Кнопки ниже — только для {user_label}",
     ]
     return "\n".join(lines)
 
@@ -286,9 +304,8 @@ def _format_result(
     multiplier: float,
 ) -> str:
     opened_safe = _opened_safe_count(session)
-    who = escape_markdown(user_label)
     lines = [
-        f"💣 *Мины* — {who}",
+        f"💣 Мины — {user_label}",
         "",
         f"{session.mine_count} мины · открыто {opened_safe} · ×{multiplier:.2f}",
         "",
@@ -364,21 +381,39 @@ async def _finish_session(
             "mines": session.mines,
         },
     )
-    await clear_session(conn, session.telegram_id)
     rank = await get_user_rank(conn, session.telegram_id)
+    session.status = "finished"
+    session.result = {
+        "outcome": outcome,
+        "flair": flair,
+        "points": points,
+        "rank": rank,
+    }
+    await save_session(conn, session)
+    return build_finished_view(session, user_label)
+
+
+def build_finished_view(session: MinesSession, user_label: str) -> MinesView:
+    result = session.result or {}
+    outcome = result.get("outcome") or "cashout"
+    flair = str(result.get("flair") or "")
+    points = int(result.get("points") or 0)
+    rank = result.get("rank")
+    opened_safe = _opened_safe_count(session)
+    mult = multiplier_for(session.mine_count, opened_safe)
 
     view = _view_from_session(
         session,
         user_label,
         finished=True,
-        outcome=outcome,
+        outcome=outcome,  # type: ignore[arg-type]
         flair=flair,
         points=points,
     )
     text = view.text
     if rank is not None:
         text += f"\n🏆 Место в недельном топе: {rank}-е"
-    text += "\n\n📊 Топ: `/games`"
+    text += "\n\n📊 Топ: /games"
     return MinesView(
         text=text,
         finished=True,
@@ -388,7 +423,7 @@ async def _finish_session(
         can_cashout=False,
         reveal_mines=True,
         mines=view.mines,
-        outcome=outcome,
+        outcome=outcome,  # type: ignore[arg-type]
         points=points,
         flair=flair,
     )
@@ -419,6 +454,8 @@ async def start_mines(
         mine_count=count,
         mines=_generate_mines(count),
         opened=[],
+        status="active",
+        result=None,
     )
     await save_session(conn, session)
     return None, _view_from_session(session, user_label, finished=False)
@@ -434,6 +471,8 @@ async def open_mines_cell(
     session = await get_session(conn, telegram_id)
     if session is None:
         return "Нет активной игры. Начните: `/mines`", None
+    if session.status == "finished":
+        return None, build_finished_view(session, user_label)
 
     idx = int(cell)
     if idx < 0 or idx >= CELL_COUNT:
@@ -477,6 +516,8 @@ async def cashout_mines(
     session = await get_session(conn, telegram_id)
     if session is None:
         return "Нет активной игры. Начните: `/mines`", None
+    if session.status == "finished":
+        return None, build_finished_view(session, user_label)
     if _opened_safe_count(session) <= 0:
         return "Сначала откройте хотя бы одну безопасную клетку.", None
 

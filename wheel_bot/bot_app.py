@@ -46,6 +46,7 @@ from wheel_bot.mines_service import (
     GRID_SIZE,
     MinesUiState,
     MinesView,
+    build_finished_view,
     cashout_mines,
     clear_session as clear_mines_session,
     get_session as get_mines_session,
@@ -1059,74 +1060,46 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         text = view.text
         chat_id = int(message.chat.id)
         result_id: int | None = board_message_id
+        if edit_message is not None:
+            result_id = int(edit_message.message_id)
 
-        async def _apply_edit(target_message_id: int, *, plain: bool) -> None:
-            nonlocal result_id
-            body = text.replace("*", "") if plain else text
-            await message.bot.edit_message_text(
-                body,
-                chat_id=chat_id,
-                message_id=target_message_id,
-                parse_mode=None if plain else "Markdown",
-                reply_markup=markup,
-            )
-            result_id = target_message_id
-
-        async def _apply_markup_only(target_message_id: int) -> None:
-            nonlocal result_id
-            await message.bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=target_message_id,
-                reply_markup=markup,
-            )
-            result_id = target_message_id
-
-        try:
-            if edit_message is not None:
-                await edit_message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
-                result_id = int(edit_message.message_id)
-            elif board_message_id is not None:
-                await _apply_edit(board_message_id, plain=False)
-            else:
-                sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
-                result_id = int(sent.message_id)
-        except TelegramBadRequest as exc:
-            err = str(exc).lower()
-            target_id = (
-                int(edit_message.message_id)
-                if edit_message is not None
-                else board_message_id
-            )
-            if target_id is not None and "message is not modified" in err:
-                result_id = target_id
-            else:
-                plain = text.replace("*", "")
-                try:
-                    if edit_message is not None:
-                        await edit_message.edit_text(plain, reply_markup=markup)
-                        result_id = int(edit_message.message_id)
-                    elif board_message_id is not None:
-                        await _apply_edit(board_message_id, plain=True)
-                    else:
-                        sent = await message.answer(plain, reply_markup=markup)
-                        result_id = int(sent.message_id)
-                except TelegramBadRequest as exc2:
-                    err2 = str(exc2).lower()
-                    if target_id is not None and "message is not modified" in err2:
-                        result_id = target_id
-                    elif target_id is not None:
-                        try:
-                            await _apply_markup_only(target_id)
-                        except TelegramBadRequest as exc3:
-                            if "message is not modified" not in str(exc3).lower():
-                                raise
-                            result_id = target_id
-                    else:
-                        sent = await message.answer(plain, reply_markup=markup)
-                        result_id = int(sent.message_id)
-
+        updated = False
         if result_id is not None:
+            try:
+                await message.bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=int(result_id),
+                    reply_markup=markup,
+                )
+                updated = True
+            except TelegramBadRequest as exc:
+                if "message is not modified" in str(exc).lower():
+                    updated = True
+                else:
+                    log.warning("mines edit markup failed chat=%s msg=%s: %s", chat_id, result_id, exc)
+            try:
+                await message.bot.edit_message_text(
+                    text,
+                    chat_id=chat_id,
+                    message_id=int(result_id),
+                    reply_markup=markup,
+                )
+                updated = True
+            except TelegramBadRequest as exc:
+                if "message is not modified" in str(exc).lower():
+                    updated = True
+                else:
+                    log.warning("mines edit text failed chat=%s msg=%s: %s", chat_id, result_id, exc)
+        else:
+            sent = await message.answer(text, reply_markup=markup)
+            result_id = int(sent.message_id)
+            updated = True
+
+        if result_id is not None and updated:
             await _remember_mines_board(owner_id, chat_id, result_id)
+            if view.finished:
+                async with db_lock:
+                    await clear_mines_session(conn, owner_id)
         return result_id
 
     async def _run_mines_cashout(message: Message, uid: int, label: str) -> None:
@@ -1824,45 +1797,94 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     log.exception("mines restart view update failed")
                 return
 
+            resync_view: MinesView | None = None
+            stale_board = False
+            err: str | None = None
+            view: MinesView | None = None
+
             async with db_lock:
                 label = await remember_telegram_user(conn, user)
                 session = await get_mines_session(conn, owner_id)
                 if session is None:
-                    await cb.answer("Игра уже завершена.", show_alert=True)
-                    return
-                if session.message_id and cb.message.message_id != session.message_id:
-                    await cb.answer(
-                        "Это старое поле. Используйте актуальное сообщение своей игры.",
-                        show_alert=True,
-                    )
-                    return
-                if int(session.chat_id) != int(cb.message.chat.id):
-                    await cb.answer("Игра привязана к другому чату.", show_alert=True)
-                    return
-                if action == "c":
-                    err, view = await cashout_mines(
-                        conn,
-                        telegram_id=owner_id,
-                        user_label=label,
-                    )
+                    stale_board = True
                 else:
-                    if len(parts) != 4:
-                        await cb.answer("Устаревшие кнопки.", show_alert=True)
+                    stale_board = False
+                    ui = await get_mines_ui_state(conn, owner_id)
+                    cb_mid = int(cb.message.message_id)
+                    known_ids = {
+                        int(mid)
+                        for mid in (session.message_id, ui.board_message_id if ui else None)
+                        if mid is not None
+                    }
+                    if known_ids and cb_mid not in known_ids:
+                        await cb.answer(
+                            "Это старое поле. Используйте актуальное сообщение своей игры.",
+                            show_alert=True,
+                        )
                         return
-                    try:
-                        cell = int(parts[3])
-                    except ValueError:
-                        await cb.answer("Устаревшие кнопки.", show_alert=True)
+                    if session.message_id != cb_mid:
+                        await set_mines_board_message_id(conn, owner_id, cb_mid)
+                    if int(session.chat_id) != int(cb.message.chat.id):
+                        await cb.answer("Игра привязана к другому чату.", show_alert=True)
                         return
-                    if cell in session.opened_set:
-                        await cb.answer("Эта клетка уже открыта.")
-                        return
-                    err, view = await open_mines_cell(
-                        conn,
-                        telegram_id=owner_id,
-                        user_label=label,
-                        cell=cell,
+                    if session.status == "finished":
+                        resync_view = build_finished_view(session, label)
+                    elif action == "c":
+                        err, view = await cashout_mines(
+                            conn,
+                            telegram_id=owner_id,
+                            user_label=label,
+                        )
+                    else:
+                        if len(parts) != 4:
+                            await cb.answer("Устаревшие кнопки.", show_alert=True)
+                            return
+                        try:
+                            cell = int(parts[3])
+                        except ValueError:
+                            await cb.answer("Устаревшие кнопки.", show_alert=True)
+                            return
+                        if cell in session.opened_set:
+                            await cb.answer("Эта клетка уже открыта.")
+                            return
+                        err, view = await open_mines_cell(
+                            conn,
+                            telegram_id=owner_id,
+                            user_label=label,
+                            cell=cell,
+                        )
+
+            if stale_board:
+                await cb.answer("Игра завершена. Начните заново.", show_alert=True)
+                try:
+                    await cb.message.edit_reply_markup(
+                        reply_markup=InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text="💣 Начать заново",
+                                        callback_data=f"ms:n:{owner_id}:3",
+                                    )
+                                ]
+                            ]
+                        )
                     )
+                except TelegramBadRequest:
+                    pass
+                return
+
+            if resync_view is not None:
+                await cb.answer()
+                try:
+                    await _send_mines_view(
+                        cb.message,
+                        resync_view,
+                        owner_id=owner_id,
+                        edit_message=cb.message,
+                    )
+                except Exception:
+                    log.exception("mines finished resync failed")
+                return
 
             if err:
                 clean = err.replace("`", "").replace("*", "")
