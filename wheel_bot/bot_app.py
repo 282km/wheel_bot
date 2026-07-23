@@ -1771,7 +1771,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 return
 
             if action == "x":
-                await cb.answer("Клетка уже открыта.")
+                await cb.answer("Эта клетка уже открыта.")
                 return
 
             async with db_lock:
@@ -1824,8 +1824,6 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     log.exception("mines restart view update failed")
                 return
 
-            await cb.answer()
-
             async with db_lock:
                 label = await remember_telegram_user(conn, user)
                 session = await get_mines_session(conn, owner_id)
@@ -1856,6 +1854,9 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     except ValueError:
                         await cb.answer("Устаревшие кнопки.", show_alert=True)
                         return
+                    if cell in session.opened_set:
+                        await cb.answer("Эта клетка уже открыта.")
+                        return
                     err, view = await open_mines_cell(
                         conn,
                         telegram_id=owner_id,
@@ -1864,13 +1865,16 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     )
 
             if err:
-                try:
-                    await cb.message.reply(err.replace("`", "").replace("*", ""))
-                except Exception:
-                    pass
+                clean = err.replace("`", "").replace("*", "")
+                if "уже открыта" in clean.lower():
+                    await cb.answer("Эта клетка уже открыта.")
+                else:
+                    await cb.answer(clean, show_alert=True)
                 return
             if not view:
+                await cb.answer()
                 return
+            await cb.answer()
             try:
                 await _send_mines_view(
                     cb.message,
