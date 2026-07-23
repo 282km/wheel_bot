@@ -8,7 +8,7 @@ from typing import Any, Literal, Optional
 import aiosqlite
 
 from wheel_bot.db import utc_now_iso
-from wheel_bot.game_service import get_user_rank, record_play
+from wheel_bot.game_service import record_play
 
 Phase = Literal["bonus_pick", "free_spins"]
 
@@ -472,7 +472,6 @@ async def _finish_bonus(
             "sticky_wilds": len(session.sticky_wilds),
         },
     )
-    rank = await get_user_rank(conn, session.telegram_id)
     await clear_session(conn, session.telegram_id)
     lines = [
         "🎉 *Бонус завершён!*",
@@ -490,7 +489,6 @@ async def _finish_bonus(
         lines=lines,
         action="spin",
         can_act=True,
-        rank=rank,
     )
 
 
@@ -675,7 +673,6 @@ async def spin_dogslot(
         points=base_points,
         meta={"mode": "base", "notes": notes},
     )
-    rank = await get_user_rank(conn, telegram_id)
 
     lines = [
         _format_grid(grid),
@@ -692,7 +689,6 @@ async def spin_dogslot(
         lines=lines,
         action="spin",
         can_act=True,
-        rank=rank,
     )
 
 

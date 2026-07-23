@@ -420,6 +420,15 @@ def _admin_webapp_keyboard(settings: Settings) -> InlineKeyboardMarkup:
 def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asyncio.Lock) -> Router:
     router = Router(name="wheel")
     log = logging.getLogger("wheel_bot.bot")
+    dogslot_user_locks: dict[int, asyncio.Lock] = {}
+
+    def _dogslot_user_lock(telegram_id: int) -> asyncio.Lock:
+        tid = int(telegram_id)
+        lock = dogslot_user_locks.get(tid)
+        if lock is None:
+            lock = asyncio.Lock()
+            dogslot_user_locks[tid] = lock
+        return lock
 
     from wheel_bot.destinations import read_destination_config
     from wheel_bot.posting import get_stats_chat_id
@@ -1820,31 +1829,42 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 await cb.answer("Это слот другого игрока.", show_alert=True)
                 return
 
-            async with db_lock:
-                enabled = await mini_games_enabled(conn, settings)
-            if not enabled:
-                role = await _user_role(int(user.id))
-                if role != "superadmin":
-                    await cb.answer("Мини-игры выключены.", show_alert=True)
-                    return
             target_id = _configured_stats_chat_id()
             if int(cb.message.chat.id) != int(target_id):
                 await cb.answer("Кнопки работают только в чате статистики.", show_alert=True)
                 return
 
+            user_lock = _dogslot_user_lock(owner_id)
             await cb.answer()
 
             action_map = {"s": "spin", "p": "pick", "f": "free_spin"}
-            async with db_lock:
-                label = await remember_telegram_user(conn, user)
-                err, view = await dogslot_action(
-                    conn,
-                    telegram_id=owner_id,
-                    user_label=label,
-                    chat_id=int(cb.message.chat.id),
-                    action=action_map[action],  # type: ignore[arg-type]
-                )
+            err: str | None = None
+            view: DogslotView | None = None
+            disabled = False
 
+            async with user_lock:
+                async with db_lock:
+                    enabled = await mini_games_enabled(conn, settings)
+                    if not enabled:
+                        role = await db.ensure_user(conn, int(user.id))
+                        if role != "superadmin":
+                            disabled = True
+                    if not disabled:
+                        label = await remember_telegram_user(conn, user)
+                        err, view = await dogslot_action(
+                            conn,
+                            telegram_id=owner_id,
+                            user_label=label,
+                            chat_id=int(cb.message.chat.id),
+                            action=action_map[action],  # type: ignore[arg-type]
+                        )
+
+            if disabled:
+                try:
+                    await cb.message.reply("🎮 Мини-игры выключены.")
+                except Exception:
+                    pass
+                return
             if err:
                 try:
                     await cb.message.answer(err.replace("`", "").replace("*", ""))
@@ -1871,7 +1891,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     log.exception("dogslot view fallback failed")
         except TelegramForbiddenError:
             log.warning("dogslot callback: forbidden in chat %s", cb.message.chat.id if cb.message else "?")
-            await cb.answer()
+            try:
+                await cb.answer()
+            except Exception:
+                pass
         except Exception:
             log.exception("dogslot callback failed")
             try:

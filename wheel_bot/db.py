@@ -99,6 +99,7 @@ async def connect(db_path: Path) -> aiosqlite.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = await aiosqlite.connect(db_path)
     conn.row_factory = aiosqlite.Row
+    await conn.execute("PRAGMA busy_timeout=10000")
     await conn.executescript(SCHEMA)
     # Migration for existing databases created before is_hidden field.
     cols = await (await conn.execute("PRAGMA table_info(participants)")).fetchall()
