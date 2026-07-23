@@ -20,12 +20,16 @@ from wheel_bot import db
 from wheel_bot.bonus_messages import format_bonus_admin_notify, format_bonus_result
 from wheel_bot.bonus_service import try_daily_bonus
 from wheel_bot.blackjack_service import (
+    BlackjackUiState,
     BlackjackView,
     get_session,
+    get_ui_state,
     hit_blackjack,
+    save_ui_state,
     set_board_message_id,
     stand_blackjack,
     start_blackjack,
+    clear_session,
 )
 from wheel_bot.config import Settings
 from wheel_bot.feature_flags import (
@@ -695,6 +699,60 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         except TelegramBadRequest:
             await message.reply(text.replace("*", ""))
 
+    async def _cleanup_blackjack_messages(
+        bot,
+        telegram_id: int,
+        chat_id: int,
+        *,
+        also_delete: int | None = None,
+    ) -> None:
+        async with db_lock:
+            ui = await get_ui_state(conn, int(telegram_id))
+            session = await get_session(conn, int(telegram_id))
+            if session is not None:
+                await clear_session(conn, int(telegram_id))
+
+        to_delete: list[int] = []
+        if ui:
+            if ui.board_message_id is not None:
+                to_delete.append(int(ui.board_message_id))
+            if ui.command_message_id is not None:
+                to_delete.append(int(ui.command_message_id))
+        if session and session.message_id is not None:
+            mid = int(session.message_id)
+            if mid not in to_delete:
+                to_delete.append(mid)
+        if also_delete is not None and int(also_delete) not in to_delete:
+            to_delete.append(int(also_delete))
+
+        for mid in to_delete:
+            try:
+                await bot.delete_message(chat_id=int(chat_id), message_id=mid)
+            except TelegramBadRequest:
+                pass
+            except Exception:
+                log.debug("bj cleanup delete failed chat=%s msg=%s", chat_id, mid, exc_info=True)
+
+        async with db_lock:
+            await save_ui_state(
+                conn,
+                BlackjackUiState(telegram_id=int(telegram_id), chat_id=int(chat_id)),
+            )
+
+    async def _remember_blackjack_board(telegram_id: int, chat_id: int, board_message_id: int) -> None:
+        async with db_lock:
+            ui = await get_ui_state(conn, int(telegram_id))
+            cmd_mid = ui.command_message_id if ui else None
+            await save_ui_state(
+                conn,
+                BlackjackUiState(
+                    telegram_id=int(telegram_id),
+                    chat_id=int(chat_id),
+                    board_message_id=int(board_message_id),
+                    command_message_id=cmd_mid,
+                ),
+            )
+
     async def _send_blackjack_view(
         message: Message,
         view: BlackjackView,
@@ -702,12 +760,14 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         owner_id: int,
         edit_message: Message | None = None,
         board_message_id: int | None = None,
-    ) -> None:
+    ) -> int | None:
         markup = None if view.finished else _blackjack_keyboard(owner_id)
         text = view.text
         chat_id = int(message.chat.id)
+        result_id: int | None = board_message_id
 
         async def _apply_edit(target_message_id: int) -> None:
+            nonlocal result_id
             await message.bot.edit_message_text(
                 text,
                 chat_id=chat_id,
@@ -715,22 +775,26 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 parse_mode="Markdown",
                 reply_markup=markup,
             )
+            result_id = target_message_id
 
         try:
             if edit_message is not None:
                 await edit_message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+                result_id = int(edit_message.message_id)
             elif board_message_id is not None:
                 await _apply_edit(board_message_id)
             else:
                 sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
+                result_id = int(sent.message_id)
                 if not view.finished:
                     async with db_lock:
-                        await set_board_message_id(conn, owner_id, int(sent.message_id))
+                        await set_board_message_id(conn, owner_id, result_id)
         except TelegramBadRequest:
             plain = text.replace("*", "")
             try:
                 if edit_message is not None:
                     await edit_message.edit_text(plain, reply_markup=markup)
+                    result_id = int(edit_message.message_id)
                 elif board_message_id is not None:
                     await message.bot.edit_message_text(
                         plain,
@@ -738,18 +802,26 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                         message_id=board_message_id,
                         reply_markup=markup,
                     )
+                    result_id = board_message_id
                 else:
                     sent = await message.answer(plain, reply_markup=markup)
+                    result_id = int(sent.message_id)
                     if not view.finished:
                         async with db_lock:
-                            await set_board_message_id(conn, owner_id, int(sent.message_id))
+                            await set_board_message_id(conn, owner_id, result_id)
             except TelegramBadRequest:
                 if not view.finished:
                     sent = await message.answer(plain, reply_markup=markup)
+                    result_id = int(sent.message_id)
                     async with db_lock:
-                        await set_board_message_id(conn, owner_id, int(sent.message_id))
+                        await set_board_message_id(conn, owner_id, result_id)
                 else:
-                    await message.answer(plain)
+                    sent = await message.answer(plain)
+                    result_id = int(sent.message_id)
+
+        if result_id is not None:
+            await _remember_blackjack_board(owner_id, chat_id, result_id)
+        return result_id
 
     async def _user_role(telegram_id: int) -> str:
         async with db_lock:
@@ -916,18 +988,26 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             if not user or user.is_bot:
                 return
             label = _chat_user_label(user)
+            uid = int(user.id)
+            chat_id = int(message.chat.id)
+            await _cleanup_blackjack_messages(
+                message.bot,
+                uid,
+                chat_id,
+                also_delete=int(message.message_id),
+            )
             async with db_lock:
                 err, view = await start_blackjack(
                     conn,
-                    telegram_id=int(user.id),
+                    telegram_id=uid,
                     user_label=label,
-                    chat_id=int(message.chat.id),
+                    chat_id=chat_id,
                 )
             if err:
                 await _reply_md(message, err)
                 return
             if view:
-                await _send_blackjack_view(message, view, owner_id=int(user.id))
+                await _send_blackjack_view(message, view, owner_id=uid)
         except TelegramForbiddenError:
             log.warning("blackjack: forbidden in chat %s", message.chat.id)
         except Exception:
@@ -967,6 +1047,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     owner_id=uid,
                     board_message_id=board_mid,
                 )
+            try:
+                await message.bot.delete_message(chat_id=int(message.chat.id), message_id=int(message.message_id))
+            except TelegramBadRequest:
+                pass
         except TelegramForbiddenError:
             log.warning("hit: forbidden in chat %s", message.chat.id)
         except Exception:
@@ -1006,6 +1090,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     owner_id=uid,
                     board_message_id=board_mid,
                 )
+            try:
+                await message.bot.delete_message(chat_id=int(message.chat.id), message_id=int(message.message_id))
+            except TelegramBadRequest:
+                pass
         except TelegramForbiddenError:
             log.warning("stand: forbidden in chat %s", message.chat.id)
         except Exception:

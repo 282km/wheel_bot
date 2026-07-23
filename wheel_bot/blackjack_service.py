@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS blackjack_sessions (
     dealer_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS blackjack_ui (
+    telegram_id INTEGER PRIMARY KEY,
+    chat_id INTEGER NOT NULL,
+    board_message_id INTEGER,
+    command_message_id INTEGER
+);
 """
 
 
@@ -109,6 +115,14 @@ def score_outcome(outcome: Outcome) -> tuple[int, str]:
 
 
 @dataclass
+class BlackjackUiState:
+    telegram_id: int
+    chat_id: int
+    board_message_id: Optional[int] = None
+    command_message_id: Optional[int] = None
+
+
+@dataclass
 class BlackjackSession:
     telegram_id: int
     user_label: str
@@ -126,6 +140,46 @@ class BlackjackView:
     outcome: Optional[Outcome] = None
     points: int = 0
     flair: str = ""
+
+
+async def get_ui_state(conn: aiosqlite.Connection, telegram_id: int) -> Optional[BlackjackUiState]:
+    row = await (
+        await conn.execute(
+            """
+            SELECT telegram_id, chat_id, board_message_id, command_message_id
+            FROM blackjack_ui WHERE telegram_id = ?
+            """,
+            (int(telegram_id),),
+        )
+    ).fetchone()
+    if not row:
+        return None
+    return BlackjackUiState(
+        telegram_id=int(row["telegram_id"]),
+        chat_id=int(row["chat_id"]),
+        board_message_id=int(row["board_message_id"]) if row["board_message_id"] is not None else None,
+        command_message_id=int(row["command_message_id"]) if row["command_message_id"] is not None else None,
+    )
+
+
+async def save_ui_state(conn: aiosqlite.Connection, state: BlackjackUiState) -> None:
+    await conn.execute(
+        """
+        INSERT INTO blackjack_ui (telegram_id, chat_id, board_message_id, command_message_id)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(telegram_id) DO UPDATE SET
+            chat_id = excluded.chat_id,
+            board_message_id = excluded.board_message_id,
+            command_message_id = excluded.command_message_id
+        """,
+        (
+            int(state.telegram_id),
+            int(state.chat_id),
+            state.board_message_id,
+            state.command_message_id,
+        ),
+    )
+    await conn.commit()
 
 
 async def get_session(conn: aiosqlite.Connection, telegram_id: int) -> Optional[BlackjackSession]:
@@ -278,11 +332,7 @@ async def start_blackjack(
 ) -> tuple[Optional[str], Optional[BlackjackView]]:
     existing = await get_session(conn, telegram_id)
     if existing is not None:
-        return (
-            f"У вас уже идёт партия у сообщения выше. "
-            f"Кнопки Hit/Stand — только на вашей доске ({existing.user_label}).",
-            None,
-        )
+        await clear_session(conn, telegram_id)
 
     session = BlackjackSession(
         telegram_id=int(telegram_id),
