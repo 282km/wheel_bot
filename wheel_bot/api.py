@@ -593,7 +593,7 @@ def create_app(
                     if not ok:
                         await bot.send_message(admin_id, "Не удалось отправить тест. Проверьте логи.")
                         return
-                    mode = "сводка мини-игр" if post.source_mode == "games" else post.source_mode
+                    mode = "сводка блэкджека" if post.source_mode == "games" else post.source_mode
                     extra = [f"🧪 Тест дайджеста (режим: {mode})."]
                     if post.news_title:
                         extra.append(f"Тема: {post.news_title}")

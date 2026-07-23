@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import secrets
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Literal, Optional
 
@@ -10,14 +9,7 @@ import aiosqlite
 from wheel_bot.db import utc_now_iso
 from wheel_bot.timezones import get_timezone
 
-GameType = Literal["slots", "bowling", "duel"]
-
-SLOTS_COOLDOWN = timedelta(minutes=10)
-BOWLING_COOLDOWN = timedelta(minutes=10)
-DUEL_COOLDOWN = timedelta(hours=1)
-DUEL_MAX_PER_HOUR = 3
-
-SLOTS_JACKPOT_VALUES = frozenset({1, 22, 43, 64})
+GameType = Literal["blackjack"]
 
 GAME_SCHEMA = """
 CREATE TABLE IF NOT EXISTS game_plays (
@@ -37,23 +29,46 @@ CREATE INDEX IF NOT EXISTS idx_game_plays_user_time ON game_plays(telegram_id, p
 
 async def ensure_game_schema(conn: aiosqlite.Connection) -> None:
     await conn.executescript(GAME_SCHEMA)
+    await _migrate_game_plays(conn)
+    from wheel_bot.blackjack_service import ensure_blackjack_schema
+
+    await ensure_blackjack_schema(conn)
     await conn.commit()
 
 
-def _parse_iso(ts: str) -> datetime:
-    return datetime.fromisoformat(ts).astimezone(timezone.utc)
-
-
-def format_wait(seconds: int) -> str:
-    seconds = max(0, int(seconds))
-    minutes, sec = divmod(seconds, 60)
-    if minutes and sec:
-        return f"{minutes} мин {sec} сек"
-    if minutes:
-        return f"{minutes} мин"
-    if sec:
-        return f"{sec} сек"
-    return "меньше минуты"
+async def _migrate_game_plays(conn: aiosqlite.Connection) -> None:
+    row = await (
+        await conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='game_plays'"
+        )
+    ).fetchone()
+    if not row:
+        return
+    sql = str(row["sql"] or "")
+    if "CHECK" not in sql.upper():
+        return
+    await conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS game_plays_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id INTEGER NOT NULL,
+            user_label TEXT NOT NULL DEFAULT '',
+            game_type TEXT NOT NULL,
+            dice_value INTEGER NOT NULL DEFAULT 0,
+            points INTEGER NOT NULL,
+            meta_json TEXT NOT NULL DEFAULT '{}',
+            played_at TEXT NOT NULL
+        );
+        INSERT INTO game_plays_new
+            (id, telegram_id, user_label, game_type, dice_value, points, meta_json, played_at)
+        SELECT id, telegram_id, user_label, game_type, dice_value, points, meta_json, played_at
+        FROM game_plays;
+        DROP TABLE game_plays;
+        ALTER TABLE game_plays_new RENAME TO game_plays;
+        CREATE INDEX IF NOT EXISTS idx_game_plays_played_at ON game_plays(played_at);
+        CREATE INDEX IF NOT EXISTS idx_game_plays_user_time ON game_plays(telegram_id, played_at);
+        """
+    )
 
 
 def week_bounds(when: Optional[datetime] = None, *, tz_name: str = "Europe/Moscow") -> tuple[datetime, datetime, str]:
@@ -65,102 +80,6 @@ def week_bounds(when: Optional[datetime] = None, *, tz_name: str = "Europe/Mosco
     sunday = monday + timedelta(days=6)
     label = f"{monday.strftime('%d.%m')}–{sunday.strftime('%d.%m.%Y')}"
     return start.astimezone(timezone.utc), end.astimezone(timezone.utc), label
-
-
-def score_slots(value: int) -> tuple[int, str]:
-    v = int(value)
-    if v in SLOTS_JACKPOT_VALUES:
-        return 100, secrets.choice(
-            (
-                "JACKPOT! Три в ряд — сегодня можно идти в олл-ин… шучу 🎰",
-                "JACKPOT! Барабаны сошлись идеально!",
-                "JACKPOT! Такой спин достаётся редко!",
-            )
-        )
-    if v >= 50:
-        return 40, "Хороший спин — фортуна на вашей стороне!"
-    if v >= 20:
-        return 25, "Неплохо — ещё чуть-чуть до джекпота."
-    return 10, secrets.choice(
-        (
-            "Обычный спин — банк ушёл мимо.",
-            "Ривер не доехал, но очки в копилку.",
-            "Фортуна моргнула — попробуйте позже.",
-        )
-    )
-
-
-def score_bowling(value: int) -> tuple[int, str]:
-    v = int(value)
-    if v >= 6:
-        return 60, "СТРАЙК! Шар унёс все кегли! 🔥"
-    if v == 5:
-        return 45, "Отличный кадр — почти страйк!"
-    if v == 4:
-        return 30, "Хороший бросок!"
-    if v == 3:
-        return 15, "Средненько — дорожка живая."
-    return 5, "Соскользнул с дорожки — бывает!"
-
-
-async def _last_play_at(
-    conn: aiosqlite.Connection,
-    telegram_id: int,
-    game_type: GameType,
-) -> Optional[datetime]:
-    row = await (
-        await conn.execute(
-            """
-            SELECT played_at FROM game_plays
-            WHERE telegram_id = ? AND game_type = ?
-            ORDER BY played_at DESC
-            LIMIT 1
-            """,
-            (int(telegram_id), game_type),
-        )
-    ).fetchone()
-    if not row:
-        return None
-    return _parse_iso(str(row["played_at"]))
-
-
-async def check_cooldown(
-    conn: aiosqlite.Connection,
-    telegram_id: int,
-    game_type: GameType,
-    *,
-    now: Optional[datetime] = None,
-) -> Optional[int]:
-    ref = now or datetime.now(timezone.utc)
-    if game_type == "duel":
-        since = (ref - DUEL_COOLDOWN).isoformat()
-        row = await (
-            await conn.execute(
-                """
-                SELECT COUNT(*) AS c FROM game_plays
-                WHERE telegram_id = ? AND game_type = 'duel'
-                  AND played_at >= ?
-                """,
-                (int(telegram_id), since),
-            )
-        ).fetchone()
-        count = int(row["c"]) if row else 0
-        if count >= DUEL_MAX_PER_HOUR:
-            last = await _last_play_at(conn, telegram_id, "duel")
-            if last is None:
-                return int(DUEL_COOLDOWN.total_seconds())
-            wait = int((last + DUEL_COOLDOWN - ref).total_seconds())
-            return max(1, wait)
-        return None
-
-    delta = SLOTS_COOLDOWN if game_type == "slots" else BOWLING_COOLDOWN
-    last = await _last_play_at(conn, telegram_id, game_type)
-    if last is None:
-        return None
-    elapsed = ref - last
-    if elapsed >= delta:
-        return None
-    return max(1, int((delta - elapsed).total_seconds()))
 
 
 async def record_play(
@@ -201,6 +120,7 @@ async def _weekly_rank_map(
         SELECT telegram_id, SUM(points) AS pts, COUNT(*) AS games
         FROM game_plays
         WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
+          AND game_type = 'blackjack'
         GROUP BY telegram_id
         ORDER BY pts DESC, games DESC, telegram_id ASC
         """,
@@ -244,6 +164,7 @@ async def weekly_summary(
             COUNT(*) AS games
         FROM game_plays
         WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
+          AND game_type = 'blackjack'
         GROUP BY telegram_id
         ORDER BY points DESC, games DESC, label COLLATE NOCASE ASC
         LIMIT {int(top_limit)}
@@ -266,11 +187,11 @@ async def weekly_summary(
             SELECT
                 COUNT(*) AS total_games,
                 COUNT(DISTINCT telegram_id) AS unique_players,
-                SUM(CASE WHEN game_type = 'duel' THEN 1 ELSE 0 END) AS duels,
-                SUM(CASE WHEN game_type = 'slots' AND dice_value IN (1,22,43,64) THEN 1 ELSE 0 END) AS jackpots,
-                SUM(CASE WHEN game_type = 'bowling' AND dice_value = 6 THEN 1 ELSE 0 END) AS strikes
+                SUM(CASE WHEN points = 70 THEN 1 ELSE 0 END) AS naturals,
+                SUM(CASE WHEN points IN (40, 70) THEN 1 ELSE 0 END) AS wins
             FROM game_plays
             WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
+              AND game_type = 'blackjack'
             """,
             params,
         )
@@ -279,9 +200,8 @@ async def weekly_summary(
     summary = {
         "total_games": int(stats_row["total_games"]) if stats_row else 0,
         "unique_players": int(stats_row["unique_players"]) if stats_row else 0,
-        "duels": int(stats_row["duels"]) if stats_row else 0,
-        "jackpots": int(stats_row["jackpots"]) if stats_row else 0,
-        "strikes": int(stats_row["strikes"]) if stats_row else 0,
+        "naturals": int(stats_row["naturals"]) if stats_row else 0,
+        "wins": int(stats_row["wins"]) if stats_row else 0,
     }
 
     viewer: Optional[dict[str, Any]] = None
@@ -311,14 +231,11 @@ async def user_week_stats(
             SELECT
                 COALESCE(NULLIF(MAX(user_label), ''), 'Игрок') AS label,
                 SUM(points) AS total_points,
-                SUM(CASE WHEN game_type = 'slots' THEN 1 ELSE 0 END) AS slots_games,
-                SUM(CASE WHEN game_type = 'slots' THEN points ELSE 0 END) AS slots_points,
-                SUM(CASE WHEN game_type = 'bowling' THEN 1 ELSE 0 END) AS bowling_games,
-                SUM(CASE WHEN game_type = 'bowling' THEN points ELSE 0 END) AS bowling_points,
-                SUM(CASE WHEN game_type = 'slots' AND dice_value IN (1,22,43,64) THEN 1 ELSE 0 END) AS jackpots,
-                SUM(CASE WHEN game_type = 'bowling' AND dice_value = 6 THEN 1 ELSE 0 END) AS strikes
+                COUNT(*) AS games,
+                SUM(CASE WHEN points = 70 THEN 1 ELSE 0 END) AS naturals
             FROM game_plays
             WHERE telegram_id = ? AND datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
+              AND game_type = 'blackjack'
             """,
             params,
         )
@@ -327,38 +244,28 @@ async def user_week_stats(
     label = str(row["label"]) if row and row["label"] else "Игрок"
     week = {
         "total_points": int(row["total_points"] or 0) if row else 0,
-        "slots_games": int(row["slots_games"] or 0) if row else 0,
-        "slots_points": int(row["slots_points"] or 0) if row else 0,
-        "bowling_games": int(row["bowling_games"] or 0) if row else 0,
-        "bowling_points": int(row["bowling_points"] or 0) if row else 0,
-        "jackpots": int(row["jackpots"] or 0) if row else 0,
-        "strikes": int(row["strikes"] or 0) if row else 0,
-        "duel_wins": 0,
-        "duel_losses": 0,
-        "duel_ties": 0,
+        "games": int(row["games"] or 0) if row else 0,
+        "naturals": int(row["naturals"] or 0) if row else 0,
+        "wins": 0,
         "rank": 0,
     }
 
-    duel_cur = await conn.execute(
+    bj_cur = await conn.execute(
         """
         SELECT meta_json FROM game_plays
-        WHERE telegram_id = ? AND game_type = 'duel'
+        WHERE telegram_id = ? AND game_type = 'blackjack'
           AND datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
         """,
         params,
     )
-    for drow in await duel_cur.fetchall():
+    for brow in await bj_cur.fetchall():
         try:
-            meta = json.loads(str(drow["meta_json"] or "{}"))
+            bmeta = json.loads(str(brow["meta_json"] or "{}"))
         except json.JSONDecodeError:
             continue
-        outcome = str(meta.get("outcome") or "")
-        if outcome == "win":
-            week["duel_wins"] += 1
-        elif outcome == "loss":
-            week["duel_losses"] += 1
-        elif outcome == "tie":
-            week["duel_ties"] += 1
+        outcome = str(bmeta.get("outcome") or "")
+        if outcome in ("win", "blackjack"):
+            week["wins"] += 1
 
     rank = await get_user_rank(conn, telegram_id, when=when)
     week["rank"] = rank or 0
@@ -366,8 +273,8 @@ async def user_week_stats(
     best_row = await (
         await conn.execute(
             """
-            SELECT game_type, dice_value, points FROM game_plays
-            WHERE telegram_id = ?
+            SELECT points FROM game_plays
+            WHERE telegram_id = ? AND game_type = 'blackjack'
             ORDER BY points DESC, played_at DESC
             LIMIT 1
             """,
@@ -376,15 +283,11 @@ async def user_week_stats(
     ).fetchone()
     best: Optional[str] = None
     if best_row:
-        gt = str(best_row["game_type"])
-        dv = int(best_row["dice_value"])
         pts = int(best_row["points"])
-        if gt == "slots" and dv in SLOTS_JACKPOT_VALUES:
-            best = f"🎰 JACKPOT (+{pts} очков)"
-        elif gt == "bowling" and dv == 6:
-            best = f"🎳 страйк (+{pts} очков)"
+        if pts >= 70:
+            best = f"🃏 BLACKJACK (+{pts} очков)"
         else:
-            best = f"+{pts} очков ({gt})"
+            best = f"🃏 блэкджек (+{pts} очков)"
 
     return {
         "label": label,
@@ -401,19 +304,18 @@ async def format_morning_games_digest(
     *,
     when: Optional[datetime] = None,
 ) -> str:
-    """Утренний пост: приветствие + итоги прошлой недели + текущий топ."""
+    """Утренний пост: топ блэкджека за неделю."""
     tz = get_timezone("Europe/Moscow")
     ref = (when or datetime.now(timezone.utc)).astimezone(tz)
     _, _, current_label = week_bounds(ref)
 
-    # Утром в понедельник — итоги прошлой недели; иначе — текущая неделя.
     if ref.weekday() == 0:
         prev_when = ref - timedelta(days=1)
         data = await weekly_summary(conn, when=prev_when, top_limit=5)
-        title = f"☀️ Доброе утро, покерная братва!\n\n🏆 Итоги прошлой недели ({data['period_label']})"
+        title = f"☀️ Доброе утро, покерная братва!\n\n🃏 Блэкджек — итоги прошлой недели ({data['period_label']})"
     else:
         data = await weekly_summary(conn, when=ref, top_limit=5)
-        title = f"☀️ Доброе утро, покерная братва!\n\n🎮 Мини-игры — топ недели ({current_label})"
+        title = f"☀️ Доброе утро, покерная братва!\n\n🃏 Блэкджек — топ недели ({current_label})"
 
     lines = [title, ""]
     top = data.get("top") or []
@@ -422,8 +324,7 @@ async def format_morning_games_digest(
             [
                 "Пока никто не играл — самое время начать!",
                 "",
-                "🎰 `/slots` · 🎳 `/bowling` · ⚔️ `/duel`",
-                "📖 Инструкция: `/games help`",
+                "🃏 `/blackjack` · 📖 `/games help`",
             ]
         )
     else:
@@ -435,10 +336,10 @@ async def format_morning_games_digest(
         lines.extend(
             [
                 "",
-                f"📊 Игр: {summary.get('total_games', 0)} · "
+                f"📊 Партий: {summary.get('total_games', 0)} · "
                 f"Игроков: {summary.get('unique_players', 0)} · "
-                f"🎰 джекпотов: {summary.get('jackpots', 0)} · "
-                f"🎳 страйков: {summary.get('strikes', 0)}",
+                f"🃏 натуральных 21: {summary.get('naturals', 0)} · "
+                f"побед: {summary.get('wins', 0)}",
             ]
         )
 

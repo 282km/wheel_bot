@@ -120,7 +120,7 @@ async def send_morning_digest(
     force: bool = False,
     when: Optional[datetime] = None,
 ) -> bool:
-    """Отправить утреннюю сводку мини-игр в чат статистики."""
+    """Отправить утреннюю сводку блэкджека в чат статистики."""
     async with db_lock:
         cfg = await load_morning_digest_config(conn, settings)
     if not cfg.enabled:
