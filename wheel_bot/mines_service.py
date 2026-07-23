@@ -9,6 +9,7 @@ import aiosqlite
 
 from wheel_bot.db import utc_now_iso
 from wheel_bot.game_service import get_user_rank, record_play
+from wheel_bot.user_labels import escape_markdown
 
 Outcome = Literal["cashout", "bust", "perfect"]
 
@@ -261,15 +262,16 @@ def _opened_safe_count(session: MinesSession) -> int:
 def _format_active(session: MinesSession, user_label: str) -> str:
     opened_safe = _opened_safe_count(session)
     mult = multiplier_for(session.mine_count, opened_safe)
+    who = escape_markdown(user_label)
     lines = [
-        f"💣 *Мины* — {user_label}",
+        f"💣 *Мины* — {who}",
         "",
         f"{session.mine_count} мины · открыто {opened_safe} · ×{mult:.2f}",
         "",
         _format_grid(session, reveal_mines=False),
         "",
         "Открывайте ⬜ — или заберите выигрыш кнопкой 💰",
-        f"👆 Кнопки ниже — только для {user_label}",
+        f"👆 Кнопки ниже — только для {who}",
     ]
     return "\n".join(lines)
 
@@ -284,8 +286,9 @@ def _format_result(
     multiplier: float,
 ) -> str:
     opened_safe = _opened_safe_count(session)
+    who = escape_markdown(user_label)
     lines = [
-        f"💣 *Мины* — {user_label}",
+        f"💣 *Мины* — {who}",
         "",
         f"{session.mine_count} мины · открыто {opened_safe} · ×{multiplier:.2f}",
         "",

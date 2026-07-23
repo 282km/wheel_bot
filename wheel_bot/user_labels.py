@@ -35,6 +35,14 @@ def plain_player_label(label: str, *, default: str = "Игрок") -> str:
     return s[1:] if s.startswith("@") else s
 
 
+def escape_markdown(text: str) -> str:
+    """Экранирование для Telegram Markdown (legacy)."""
+    out = str(text)
+    for ch in ("\\", "_", "*", "`"):
+        out = out.replace(ch, f"\\{ch}")
+    return out
+
+
 def is_likely_username(label: str) -> bool:
     s = plain_player_label(label, default="")
     if not s:

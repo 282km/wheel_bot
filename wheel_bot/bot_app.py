@@ -1043,6 +1043,9 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     command_message_id=cmd_mid,
                 ),
             )
+            session = await get_mines_session(conn, int(telegram_id))
+            if session is not None:
+                await set_mines_board_message_id(conn, int(telegram_id), int(board_message_id))
 
     async def _send_mines_view(
         message: Message,
@@ -1057,13 +1060,23 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         chat_id = int(message.chat.id)
         result_id: int | None = board_message_id
 
-        async def _apply_edit(target_message_id: int) -> None:
+        async def _apply_edit(target_message_id: int, *, plain: bool) -> None:
             nonlocal result_id
+            body = text.replace("*", "") if plain else text
             await message.bot.edit_message_text(
-                text,
+                body,
                 chat_id=chat_id,
                 message_id=target_message_id,
-                parse_mode="Markdown",
+                parse_mode=None if plain else "Markdown",
+                reply_markup=markup,
+            )
+            result_id = target_message_id
+
+        async def _apply_markup_only(target_message_id: int) -> None:
+            nonlocal result_id
+            await message.bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=target_message_id,
                 reply_markup=markup,
             )
             result_id = target_message_id
@@ -1073,36 +1086,47 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 await edit_message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
                 result_id = int(edit_message.message_id)
             elif board_message_id is not None:
-                await _apply_edit(board_message_id)
+                await _apply_edit(board_message_id, plain=False)
             else:
                 sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
                 result_id = int(sent.message_id)
-        except TelegramBadRequest:
-            plain = text.replace("*", "")
-            try:
-                if edit_message is not None:
-                    await edit_message.edit_text(plain, reply_markup=markup)
-                    result_id = int(edit_message.message_id)
-                elif board_message_id is not None:
-                    await message.bot.edit_message_text(
-                        plain,
-                        chat_id=chat_id,
-                        message_id=board_message_id,
-                        reply_markup=markup,
-                    )
-                    result_id = board_message_id
-                else:
-                    sent = await message.answer(plain, reply_markup=markup)
-                    result_id = int(sent.message_id)
-            except TelegramBadRequest:
-                sent = await message.answer(plain, reply_markup=markup)
-                result_id = int(sent.message_id)
+        except TelegramBadRequest as exc:
+            err = str(exc).lower()
+            target_id = (
+                int(edit_message.message_id)
+                if edit_message is not None
+                else board_message_id
+            )
+            if target_id is not None and "message is not modified" in err:
+                result_id = target_id
+            else:
+                plain = text.replace("*", "")
+                try:
+                    if edit_message is not None:
+                        await edit_message.edit_text(plain, reply_markup=markup)
+                        result_id = int(edit_message.message_id)
+                    elif board_message_id is not None:
+                        await _apply_edit(board_message_id, plain=True)
+                    else:
+                        sent = await message.answer(plain, reply_markup=markup)
+                        result_id = int(sent.message_id)
+                except TelegramBadRequest as exc2:
+                    err2 = str(exc2).lower()
+                    if target_id is not None and "message is not modified" in err2:
+                        result_id = target_id
+                    elif target_id is not None:
+                        try:
+                            await _apply_markup_only(target_id)
+                        except TelegramBadRequest as exc3:
+                            if "message is not modified" not in str(exc3).lower():
+                                raise
+                            result_id = target_id
+                    else:
+                        sent = await message.answer(plain, reply_markup=markup)
+                        result_id = int(sent.message_id)
 
         if result_id is not None:
             await _remember_mines_board(owner_id, chat_id, result_id)
-            if not view.finished:
-                async with db_lock:
-                    await set_mines_board_message_id(conn, owner_id, result_id)
         return result_id
 
     async def _run_mines_cashout(message: Message, uid: int, label: str) -> None:
@@ -1771,6 +1795,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 except ValueError:
                     await cb.answer("Устаревшие кнопки. Начните /mines", show_alert=True)
                     return
+                await cb.answer()
                 async with db_lock:
                     label = await remember_telegram_user(conn, user)
                     err, view = await start_mines(
@@ -1781,19 +1806,25 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                         mine_count=mine_count,
                     )
                 if err:
-                    await cb.answer(err.replace("`", "").replace("*", ""), show_alert=True)
+                    try:
+                        await cb.message.reply(err.replace("`", "").replace("*", ""))
+                    except Exception:
+                        pass
                     return
                 if not view:
-                    await cb.answer()
                     return
-                await cb.answer()
-                await _send_mines_view(
-                    cb.message,
-                    view,
-                    owner_id=owner_id,
-                    edit_message=cb.message,
-                )
+                try:
+                    await _send_mines_view(
+                        cb.message,
+                        view,
+                        owner_id=owner_id,
+                        edit_message=cb.message,
+                    )
+                except Exception:
+                    log.exception("mines restart view update failed")
                 return
+
+            await cb.answer()
 
             async with db_lock:
                 label = await remember_telegram_user(conn, user)
@@ -1833,18 +1864,29 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     )
 
             if err:
-                await cb.answer(err.replace("`", "").replace("*", ""), show_alert=True)
+                try:
+                    await cb.message.reply(err.replace("`", "").replace("*", ""))
+                except Exception:
+                    pass
                 return
             if not view:
-                await cb.answer()
                 return
-            await cb.answer()
-            await _send_mines_view(
-                cb.message,
-                view,
-                owner_id=owner_id,
-                edit_message=cb.message,
-            )
+            try:
+                await _send_mines_view(
+                    cb.message,
+                    view,
+                    owner_id=owner_id,
+                    edit_message=cb.message,
+                )
+            except Exception:
+                log.exception("mines view update failed")
+                try:
+                    await cb.message.answer(
+                        view.text.replace("*", ""),
+                        reply_markup=_mines_keyboard(view, owner_id),
+                    )
+                except Exception:
+                    log.exception("mines view fallback failed")
         except TelegramForbiddenError:
             log.warning("mines callback: forbidden in chat %s", cb.message.chat.id if cb.message else "?")
             await cb.answer()
