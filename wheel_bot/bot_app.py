@@ -669,15 +669,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
 
     @router.message(lambda message: _is_delete_reply_command(message))
     async def delete_reply_cmd(message: Message) -> None:
-        """Ответом на сообщение — удалить его (admin/superadmin)."""
+        """Ответом на сообщение — удалить его (любой участник чата)."""
         try:
             user = message.from_user
             if not user or user.is_bot:
-                return
-            async with db_lock:
-                role = await db.ensure_user(conn, int(user.id))
-            if role not in ("admin", "superadmin"):
-                await message.reply("Команда /удоли только для админов бота.")
                 return
             if not message.reply_to_message:
                 await message.reply("Ответьте на сообщение, которое нужно удалить.")
