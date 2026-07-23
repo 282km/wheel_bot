@@ -179,7 +179,7 @@ async def get_session(conn: aiosqlite.Connection, telegram_id: int) -> Optional[
     row = await (
         await conn.execute(
             """
-            SELECT telegram_id, user_label, chat_id, message_id, mine_count, mines_json, opened_json
+            SELECT telegram_id, user_label, chat_id, message_id, mine_count, mines_json, opened_json, status, result_json
             FROM mines_sessions WHERE telegram_id = ?
             """,
             (int(telegram_id),),
