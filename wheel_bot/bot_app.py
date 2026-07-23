@@ -1835,25 +1835,26 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                                 telegram_id=owner_id,
                                 user_label=label,
                             )
-                        else:
-                            if len(parts) != 4:
-                                err = "Устаревшие кнопки. Начните /mines"
                             else:
-                                try:
-                                    cell = int(parts[3])
-                                except ValueError:
+                                if len(parts) != 4:
                                     err = "Устаревшие кнопки. Начните /mines"
-                                elif cell in session.opened_set:
-                                    err = "__already_open__"
                                 else:
-                                    if session.message_id != cb_mid:
-                                        await set_mines_board_message_id(conn, owner_id, cb_mid)
-                                    err, view = await open_mines_cell(
-                                        conn,
-                                        telegram_id=owner_id,
-                                        user_label=label,
-                                        cell=cell,
-                                    )
+                                    try:
+                                        cell = int(parts[3])
+                                    except ValueError:
+                                        err = "Устаревшие кнопки. Начните /mines"
+                                    else:
+                                        if cell in session.opened_set:
+                                            err = "__already_open__"
+                                        else:
+                                            if session.message_id != cb_mid:
+                                                await set_mines_board_message_id(conn, owner_id, cb_mid)
+                                            err, view = await open_mines_cell(
+                                                conn,
+                                                telegram_id=owner_id,
+                                                user_label=label,
+                                                cell=cell,
+                                            )
 
                 if wrong_board:
                     try:
