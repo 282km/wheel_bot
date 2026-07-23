@@ -19,6 +19,14 @@ from aiogram.types import (
 from wheel_bot import db
 from wheel_bot.bonus_messages import format_bonus_admin_notify, format_bonus_result
 from wheel_bot.bonus_service import try_daily_bonus
+from wheel_bot.blackjack_service import (
+    BlackjackView,
+    get_session,
+    hit_blackjack,
+    set_board_message_id,
+    stand_blackjack,
+    start_blackjack,
+)
 from wheel_bot.config import Settings
 from wheel_bot.feature_flags import (
     features_status,
@@ -26,20 +34,11 @@ from wheel_bot.feature_flags import (
     set_mini_games_enabled,
 )
 from wheel_bot.game_messages import (
-    format_bowling_result,
-    format_duel_result,
     format_games_welcome,
     format_leaderboard,
-    format_slots_result,
     format_user_stats,
 )
 from wheel_bot.game_service import (
-    check_cooldown,
-    format_wait,
-    get_user_rank,
-    record_play,
-    score_bowling,
-    score_slots,
     user_week_stats,
     weekly_summary,
 )
@@ -68,6 +67,18 @@ def _period_keyboard() -> InlineKeyboardMarkup:
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _blackjack_keyboard(owner_id: int) -> InlineKeyboardMarkup:
+    oid = int(owner_id)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🃏 Hit", callback_data=f"bj:hit:{oid}"),
+                InlineKeyboardButton(text="✋ Stand", callback_data=f"bj:stand:{oid}"),
+            ]
+        ]
+    )
 
 
 def _fmt_money(x: float) -> str:
@@ -229,23 +240,23 @@ def _is_games_command(message: Message) -> bool:
     return _first_command_token(message.text) == "/games"
 
 
-def _is_slots_command(message: Message) -> bool:
+def _is_blackjack_command(message: Message) -> bool:
     if not message.text:
         return False
     token = _first_command_token(message.text)
-    return token in ("/slots", "/play")
+    return token in ("/blackjack", "/bj")
 
 
-def _is_bowling_command(message: Message) -> bool:
+def _is_hit_command(message: Message) -> bool:
     if not message.text:
         return False
-    return _first_command_token(message.text) == "/bowling"
+    return _first_command_token(message.text) == "/hit"
 
 
-def _is_duel_command(message: Message) -> bool:
+def _is_stand_command(message: Message) -> bool:
     if not message.text:
         return False
-    return _first_command_token(message.text) == "/duel"
+    return _first_command_token(message.text) == "/stand"
 
 
 def _games_subcommand(message: Message) -> str | None:
@@ -374,7 +385,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 if not ok:
                     await message.answer("Не удалось отправить тест. Проверьте логи wheel-bot.")
                     return
-                mode = "сводка мини-игр" if post.source_mode == "games" else post.source_mode
+                mode = "сводка блэкджека" if post.source_mode == "games" else post.source_mode
                 lines = [
                     "🧪 Тест отправлен вам (в чат статистики не ушло).",
                     f"Режим: {mode}",
@@ -684,6 +695,62 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         except TelegramBadRequest:
             await message.reply(text.replace("*", ""))
 
+    async def _send_blackjack_view(
+        message: Message,
+        view: BlackjackView,
+        *,
+        owner_id: int,
+        edit_message: Message | None = None,
+        board_message_id: int | None = None,
+    ) -> None:
+        markup = None if view.finished else _blackjack_keyboard(owner_id)
+        text = view.text
+        chat_id = int(message.chat.id)
+
+        async def _apply_edit(target_message_id: int) -> None:
+            await message.bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=target_message_id,
+                parse_mode="Markdown",
+                reply_markup=markup,
+            )
+
+        try:
+            if edit_message is not None:
+                await edit_message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+            elif board_message_id is not None:
+                await _apply_edit(board_message_id)
+            else:
+                sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
+                if not view.finished:
+                    async with db_lock:
+                        await set_board_message_id(conn, owner_id, int(sent.message_id))
+        except TelegramBadRequest:
+            plain = text.replace("*", "")
+            try:
+                if edit_message is not None:
+                    await edit_message.edit_text(plain, reply_markup=markup)
+                elif board_message_id is not None:
+                    await message.bot.edit_message_text(
+                        plain,
+                        chat_id=chat_id,
+                        message_id=board_message_id,
+                        reply_markup=markup,
+                    )
+                else:
+                    sent = await message.answer(plain, reply_markup=markup)
+                    if not view.finished:
+                        async with db_lock:
+                            await set_board_message_id(conn, owner_id, int(sent.message_id))
+            except TelegramBadRequest:
+                if not view.finished:
+                    sent = await message.answer(plain, reply_markup=markup)
+                    async with db_lock:
+                        await set_board_message_id(conn, owner_id, int(sent.message_id))
+                else:
+                    await message.answer(plain)
+
     async def _user_role(telegram_id: int) -> str:
         async with db_lock:
             return await db.ensure_user(conn, telegram_id)
@@ -709,10 +776,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         morning = "✅ включена" if st["morning"] else "❌ выключена"
         await message.answer(
             "⚙️ Функции бота\n\n"
-            f"🎮 Мини-игры: {games}\n"
+            f"🃏 Блэкджек: {games}\n"
             f"☀️ Утренняя сводка: {morning}\n\n"
             "Включить:\n"
-            "/games_on — мини-игры\n"
+            "/games_on — блэкджек\n"
             "/morning_on — утро в 8:00 (час в WebApp)\n\n"
             "Выключить:\n"
             "/games_off · /morning_off"
@@ -725,7 +792,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         async with db_lock:
             await set_mini_games_enabled(conn, True)
         await message.answer(
-            "🎮 Мини-игры включены.\n"
+            "🃏 Блэкджек включён.\n"
             "В чате: /games help · /games_welcome — инструкция для всех."
         )
 
@@ -735,7 +802,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             return
         async with db_lock:
             await set_mini_games_enabled(conn, False)
-        await message.answer("🎮 Мини-игры выключены.")
+        await message.answer("🃏 Блэкджек выключен.")
 
     @router.message(Command("morning_on"))
     async def morning_on_cmd(message: Message) -> None:
@@ -769,11 +836,11 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         role = await _user_role(tg_id)
         if role == "superadmin":
             await message.reply(
-                "🎮 Мини-игры выключены.\n"
+                "🃏 Блэкджек выключен.\n"
                 "Включить в личке: /games_on"
             )
         else:
-            await message.reply("🎮 Мини-игры сейчас выключены.")
+            await message.reply("🃏 Блэкджек сейчас выключен.")
         return False
 
     @router.message(lambda message: _is_games_command(message))
@@ -808,7 +875,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
 
     @router.message(Command("games_welcome"))
     async def games_welcome_cmd(message: Message) -> None:
-        """Superadmin: опубликовать инструкцию по мини-играм в чат."""
+        """Superadmin: опубликовать инструкцию по блэкджеку в чат."""
         try:
             tg_id = message.from_user.id if message.from_user else 0
             async with db_lock:
@@ -819,7 +886,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             async with db_lock:
                 if not await mini_games_enabled(conn, settings):
                     await message.answer(
-                        "Мини-игры выключены. Сначала: /games_on"
+                        "Блэкджек выключен. Сначала: /games_on"
                     )
                     return
             if message.chat.type == "private":
@@ -838,10 +905,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         except Exception:
             log.exception("games_welcome failed")
 
-    @router.message(lambda message: _is_slots_command(message))
-    async def slots_cmd(message: Message) -> None:
+    @router.message(lambda message: _is_blackjack_command(message))
+    async def blackjack_cmd(message: Message) -> None:
         try:
-            if not await _require_stats_group(message, "/slots"):
+            if not await _require_stats_group(message, "/blackjack"):
                 return
             if not await _require_mini_games(message):
                 return
@@ -850,46 +917,30 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 return
             label = _chat_user_label(user)
             async with db_lock:
-                wait = await check_cooldown(conn, int(user.id), "slots")
-            if wait:
-                await message.reply(f"⏳ Следующий спин через {format_wait(wait)}")
-                return
-            dice_msg = await message.answer_dice(emoji="🎰")
-            value = int(dice_msg.dice.value) if dice_msg.dice else 0
-            points, flair = score_slots(value)
-            async with db_lock:
-                await record_play(
+                err, view = await start_blackjack(
                     conn,
                     telegram_id=int(user.id),
                     user_label=label,
-                    game_type="slots",
-                    dice_value=value,
-                    points=points,
+                    chat_id=int(message.chat.id),
                 )
-                rank = await get_user_rank(conn, int(user.id))
-                wait = await check_cooldown(conn, int(user.id), "slots") or 0
-            text = format_slots_result(
-                label,
-                value=value,
-                points=points,
-                flair=flair,
-                rank=rank,
-                wait_seconds=wait,
-            )
-            await dice_msg.reply(text)
+            if err:
+                await _reply_md(message, err)
+                return
+            if view:
+                await _send_blackjack_view(message, view, owner_id=int(user.id))
         except TelegramForbiddenError:
-            log.warning("slots: forbidden in chat %s", message.chat.id)
+            log.warning("blackjack: forbidden in chat %s", message.chat.id)
         except Exception:
-            log.exception("slots handler failed")
+            log.exception("blackjack handler failed")
             try:
-                await message.answer("Ошибка /slots. Проверьте логи wheel-bot.")
+                await message.answer("Ошибка /blackjack. Проверьте логи wheel-bot.")
             except Exception:
                 pass
 
-    @router.message(lambda message: _is_bowling_command(message))
-    async def bowling_cmd(message: Message) -> None:
+    @router.message(lambda message: _is_hit_command(message))
+    async def hit_cmd(message: Message) -> None:
         try:
-            if not await _require_stats_group(message, "/bowling"):
+            if not await _require_stats_group(message, "/hit"):
                 return
             if not await _require_mini_games(message):
                 return
@@ -897,137 +948,161 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             if not user or user.is_bot:
                 return
             label = _chat_user_label(user)
+            uid = int(user.id)
             async with db_lock:
-                wait = await check_cooldown(conn, int(user.id), "bowling")
-            if wait:
-                await message.reply(f"⏳ Следующий бросок через {format_wait(wait)}")
-                return
-            dice_msg = await message.answer_dice(emoji="🎳")
-            value = int(dice_msg.dice.value) if dice_msg.dice else 0
-            points, flair = score_bowling(value)
-            async with db_lock:
-                await record_play(
+                session = await get_session(conn, uid)
+                board_mid = session.message_id if session else None
+                err, view = await hit_blackjack(
                     conn,
-                    telegram_id=int(user.id),
+                    telegram_id=uid,
                     user_label=label,
-                    game_type="bowling",
-                    dice_value=value,
-                    points=points,
                 )
-                rank = await get_user_rank(conn, int(user.id))
-                wait = await check_cooldown(conn, int(user.id), "bowling") or 0
-            text = format_bowling_result(
-                label,
-                value=value,
-                points=points,
-                flair=flair,
-                rank=rank,
-                wait_seconds=wait,
-            )
-            await dice_msg.reply(text)
+            if err:
+                await _reply_md(message, err)
+                return
+            if view:
+                await _send_blackjack_view(
+                    message,
+                    view,
+                    owner_id=uid,
+                    board_message_id=board_mid,
+                )
         except TelegramForbiddenError:
-            log.warning("bowling: forbidden in chat %s", message.chat.id)
+            log.warning("hit: forbidden in chat %s", message.chat.id)
         except Exception:
-            log.exception("bowling handler failed")
+            log.exception("hit handler failed")
             try:
-                await message.answer("Ошибка /bowling. Проверьте логи wheel-bot.")
+                await message.answer("Ошибка /hit. Проверьте логи wheel-bot.")
             except Exception:
                 pass
 
-    @router.message(lambda message: _is_duel_command(message))
-    async def duel_cmd(message: Message) -> None:
+    @router.message(lambda message: _is_stand_command(message))
+    async def stand_cmd(message: Message) -> None:
         try:
-            if not await _require_stats_group(message, "/duel"):
+            if not await _require_stats_group(message, "/stand"):
                 return
             if not await _require_mini_games(message):
                 return
             user = message.from_user
             if not user or user.is_bot:
                 return
-            reply = message.reply_to_message
-            if not reply or not reply.dice:
-                await message.reply(
-                    "⚔️ Ответьте командой /duel на сообщение с 🎲 соперника "
-                    "(он кидает кубик или вызывает вас на дуэль)."
-                )
-                return
-            if reply.dice.emoji != "🎲":
-                await message.reply("Нужно ответить на сообщение с обычным кубиком 🎲.")
-                return
-            opponent = reply.from_user
-            if not opponent or opponent.is_bot:
-                await message.reply("Дуэль только с живым игроком.")
-                return
-            if int(opponent.id) == int(user.id):
-                await message.reply("С собой дуэлиться бессмысленно 😄")
-                return
-            challenger_label = _chat_user_label(user)
-            opponent_label = _chat_user_label(opponent)
-            opponent_value = int(reply.dice.value)
+            label = _chat_user_label(user)
+            uid = int(user.id)
             async with db_lock:
-                wait = await check_cooldown(conn, int(user.id), "duel")
-            if wait:
-                await message.reply(f"⏳ Следующая дуэль через {format_wait(wait)}")
+                session = await get_session(conn, uid)
+                board_mid = session.message_id if session else None
+                err, view = await stand_blackjack(
+                    conn,
+                    telegram_id=uid,
+                    user_label=label,
+                )
+            if err:
+                await _reply_md(message, err)
                 return
-            dice_msg = await message.answer_dice(emoji="🎲")
-            challenger_value = int(dice_msg.dice.value) if dice_msg.dice else 0
-            if challenger_value > opponent_value:
-                c_pts, o_pts = 25, 5
-                c_out, o_out = "win", "loss"
-                winner = "challenger"
-            elif challenger_value < opponent_value:
-                c_pts, o_pts = 5, 25
-                c_out, o_out = "loss", "win"
-                winner = "opponent"
-            else:
-                c_pts = o_pts = 12
-                c_out = o_out = "tie"
-                winner = "tie"
-            async with db_lock:
-                await record_play(
-                    conn,
-                    telegram_id=int(user.id),
-                    user_label=challenger_label,
-                    game_type="duel",
-                    dice_value=challenger_value,
-                    points=c_pts,
-                    meta={
-                        "opponent_id": int(opponent.id),
-                        "opponent_label": opponent_label,
-                        "opponent_value": opponent_value,
-                        "outcome": c_out,
-                    },
+            if view:
+                await _send_blackjack_view(
+                    message,
+                    view,
+                    owner_id=uid,
+                    board_message_id=board_mid,
                 )
-                await record_play(
-                    conn,
-                    telegram_id=int(opponent.id),
-                    user_label=opponent_label,
-                    game_type="duel",
-                    dice_value=opponent_value,
-                    points=o_pts,
-                    meta={
-                        "opponent_id": int(user.id),
-                        "opponent_label": challenger_label,
-                        "opponent_value": challenger_value,
-                        "outcome": o_out,
-                    },
-                )
-            text = format_duel_result(
-                challenger_label=challenger_label,
-                opponent_label=opponent_label,
-                challenger_value=challenger_value,
-                opponent_value=opponent_value,
-                challenger_points=c_pts,
-                opponent_points=o_pts,
-                winner=winner,
-            )
-            await dice_msg.reply(text)
         except TelegramForbiddenError:
-            log.warning("duel: forbidden in chat %s", message.chat.id)
+            log.warning("stand: forbidden in chat %s", message.chat.id)
         except Exception:
-            log.exception("duel handler failed")
+            log.exception("stand handler failed")
             try:
-                await message.answer("Ошибка /duel. Проверьте логи wheel-bot.")
+                await message.answer("Ошибка /stand. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
+
+    @router.callback_query(F.data.startswith("bj:"))
+    async def blackjack_callback(cb: CallbackQuery) -> None:
+        try:
+            user = cb.from_user
+            if not user or user.is_bot:
+                await cb.answer()
+                return
+            if not cb.message:
+                await cb.answer()
+                return
+
+            parts = (cb.data or "").split(":")
+            if len(parts) != 3:
+                await cb.answer("Устаревшие кнопки. Начните /blackjack", show_alert=True)
+                return
+            action, owner_raw = parts[1], parts[2]
+            if action not in ("hit", "stand"):
+                await cb.answer()
+                return
+            try:
+                owner_id = int(owner_raw)
+            except ValueError:
+                await cb.answer("Устаревшие кнопки. Начните /blackjack", show_alert=True)
+                return
+            if int(user.id) != owner_id:
+                await cb.answer("Это партия другого игрока.", show_alert=True)
+                return
+
+            async with db_lock:
+                enabled = await mini_games_enabled(conn, settings)
+            if not enabled:
+                role = await _user_role(int(user.id))
+                if role != "superadmin":
+                    await cb.answer("Блэкджек выключен.", show_alert=True)
+                    return
+            target_id = _configured_stats_chat_id()
+            if int(cb.message.chat.id) != int(target_id):
+                await cb.answer("Кнопки работают только в чате статистики.", show_alert=True)
+                return
+
+            label = _chat_user_label(user)
+            async with db_lock:
+                session = await get_session(conn, owner_id)
+                if session is None:
+                    await cb.answer("Партия уже завершена.", show_alert=True)
+                    return
+                if session.message_id and cb.message.message_id != session.message_id:
+                    await cb.answer(
+                        "Это старая доска. Используйте актуальное сообщение своей партии.",
+                        show_alert=True,
+                    )
+                    return
+                if int(session.chat_id) != int(cb.message.chat.id):
+                    await cb.answer("Партия привязана к другому чату.", show_alert=True)
+                    return
+                if action == "hit":
+                    err, view = await hit_blackjack(
+                        conn,
+                        telegram_id=owner_id,
+                        user_label=label,
+                    )
+                else:
+                    err, view = await stand_blackjack(
+                        conn,
+                        telegram_id=owner_id,
+                        user_label=label,
+                    )
+
+            if err:
+                await cb.answer(err.replace("`", "").replace("*", ""), show_alert=True)
+                return
+            if not view:
+                await cb.answer()
+                return
+            await cb.answer()
+            await _send_blackjack_view(
+                cb.message,
+                view,
+                owner_id=owner_id,
+                edit_message=cb.message,
+            )
+        except TelegramForbiddenError:
+            log.warning("bj callback: forbidden in chat %s", cb.message.chat.id if cb.message else "?")
+            await cb.answer()
+        except Exception:
+            log.exception("blackjack callback failed")
+            try:
+                await cb.answer("Ошибка. Попробуйте /blackjack", show_alert=True)
             except Exception:
                 pass
 
