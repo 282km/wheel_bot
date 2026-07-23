@@ -7,7 +7,8 @@ from typing import Any
 import aiosqlite
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.filters.command import CommandObject
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -336,27 +337,17 @@ def _is_stand_command(message: Message) -> bool:
     return _first_command_token(message.text) == "/stand"
 
 
-def _is_mines_command(message: Message) -> bool:
-    if not message.text:
-        return False
-    token = _first_command_token(message.text)
-    return token in ("/mines", "/min")
-
-
 def _is_cash_command(message: Message) -> bool:
     if not message.text:
         return False
     return _first_command_token(message.text) == "/cash"
 
 
-def _mines_mine_count(message: Message) -> int:
-    if not message.text:
-        return 3
-    parts = message.text.strip().split(maxsplit=1)
-    if len(parts) < 2:
+def _parse_mine_count(args: str | None) -> int:
+    if not args or not str(args).strip():
         return 3
     try:
-        count = int(parts[1].strip())
+        count = int(str(args).strip().split()[0])
     except ValueError:
         return 3
     return count if count in (3, 5, 10) else 3
@@ -463,6 +454,15 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             lock = asyncio.Lock()
             mines_user_locks[tid] = lock
         return lock
+
+    async def _call_telegram_with_retry(coro_factory):
+        try:
+            return await coro_factory()
+        except TelegramRetryAfter as exc:
+            wait = float(exc.retry_after) + 0.5
+            log.warning("Telegram flood wait %.1fs, retrying once", wait)
+            await asyncio.sleep(wait)
+            return await coro_factory()
 
     from wheel_bot.destinations import read_destination_config
     from wheel_bot.posting import get_stats_chat_id
@@ -1002,11 +1002,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 await clear_mines_session(conn, int(telegram_id))
 
         to_delete: list[int] = []
-        if ui:
-            if ui.board_message_id is not None:
-                to_delete.append(int(ui.board_message_id))
-            if ui.command_message_id is not None:
-                to_delete.append(int(ui.command_message_id))
+        if ui and ui.board_message_id is not None:
+            to_delete.append(int(ui.board_message_id))
         if session and session.message_id is not None:
             mid = int(session.message_id)
             if mid not in to_delete:
@@ -1014,9 +1011,13 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
 
         for mid in to_delete:
             try:
-                await bot.delete_message(chat_id=int(chat_id), message_id=mid)
+                await _call_telegram_with_retry(
+                    lambda mid=mid: bot.delete_message(chat_id=int(chat_id), message_id=mid)
+                )
             except TelegramBadRequest:
                 pass
+            except TelegramRetryAfter:
+                log.warning("mines cleanup skipped delete chat=%s msg=%s (flood)", chat_id, mid)
             except Exception:
                 log.debug("mines cleanup delete failed chat=%s msg=%s", chat_id, mid, exc_info=True)
 
@@ -1078,11 +1079,13 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         updated = False
         if result_id is not None:
             try:
-                await message.bot.edit_message_text(
-                    text,
-                    chat_id=chat_id,
-                    message_id=int(result_id),
-                    reply_markup=markup,
+                await _call_telegram_with_retry(
+                    lambda: message.bot.edit_message_text(
+                        text,
+                        chat_id=chat_id,
+                        message_id=int(result_id),
+                        reply_markup=markup,
+                    )
                 )
                 updated = True
             except TelegramBadRequest as exc:
@@ -1090,12 +1093,19 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     updated = True
                 else:
                     log.warning("mines edit failed chat=%s msg=%s: %s", chat_id, result_id, exc)
+            except TelegramRetryAfter as exc:
+                log.warning("mines edit flood chat=%s wait=%ss", chat_id, exc.retry_after)
 
         if not updated:
             try:
-                sent = await message.answer(text, reply_markup=markup)
+                sent = await _call_telegram_with_retry(
+                    lambda: message.reply(text, reply_markup=markup)
+                )
                 result_id = int(sent.message_id)
                 updated = True
+            except TelegramRetryAfter as exc:
+                log.warning("mines send flood chat=%s wait=%ss", chat_id, exc.retry_after)
+                return None
             except Exception:
                 log.exception("mines send fallback failed")
                 return None
@@ -1654,8 +1664,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             except Exception:
                 pass
 
-    @router.message(lambda message: _is_mines_command(message))
-    async def mines_cmd(message: Message) -> None:
+    @router.message(Command("mines", "min"))
+    async def mines_cmd(message: Message, command: CommandObject) -> None:
         try:
             if not await _require_stats_group(message, "/mines"):
                 return
@@ -1666,7 +1676,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 return
             uid = int(user.id)
             chat_id = int(message.chat.id)
-            mine_count = _mines_mine_count(message)
+            mine_count = _parse_mine_count(command.args)
             async with db_lock:
                 label = await remember_telegram_user(conn, user)
             await _cleanup_mines_messages(message.bot, uid, chat_id)
@@ -1684,6 +1694,14 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             if view:
                 await _send_mines_view(message, view, owner_id=uid)
                 await _remember_mines_command(uid, chat_id, int(message.message_id))
+        except TelegramRetryAfter as exc:
+            log.warning("mines cmd flood chat=%s wait=%ss", message.chat.id, exc.retry_after)
+            try:
+                await message.reply(
+                    f"Telegram просит подождать ~{exc.retry_after} сек. и снова написать /min"
+                )
+            except Exception:
+                pass
         except TelegramForbiddenError:
             log.warning("mines: forbidden in chat %s", message.chat.id)
         except Exception:

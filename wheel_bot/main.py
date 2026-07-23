@@ -7,7 +7,7 @@ from typing import Any
 
 import uvicorn
 from aiogram import Bot, Dispatcher
-from aiogram.types import MenuButtonWebApp, WebAppInfo
+from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 
 from wheel_bot.api import create_app
 from wheel_bot.bot_app import setup_router
@@ -71,6 +71,22 @@ async def run() -> None:
                 log.info("Webhook registered: %s", webhook_url)
             except Exception:
                 log.exception("Webhook registration failed")
+            try:
+                await bot.set_my_commands(
+                    [
+                        BotCommand(command="mines", description="Мины 5×5"),
+                        BotCommand(command="min", description="Мины (коротко)"),
+                        BotCommand(command="blackjack", description="Блэкджек"),
+                        BotCommand(command="bj", description="Блэкджек (коротко)"),
+                        BotCommand(command="dogslot", description="The Dog House"),
+                        BotCommand(command="dog", description="Слот (коротко)"),
+                        BotCommand(command="games", description="Топ мини-игр"),
+                        BotCommand(command="stat", description="Статистика колеса"),
+                    ]
+                )
+                log.info("Bot commands registered (incl. /min alias)")
+            except Exception:
+                log.exception("Failed to set bot commands")
             try:
                 await bot.set_chat_menu_button(
                     menu_button=MenuButtonWebApp(
