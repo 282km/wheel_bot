@@ -111,6 +111,9 @@ async def connect(db_path: Path) -> aiosqlite.Connection:
         await conn.execute("ALTER TABLE wheel_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal'")
     if "results_sent" not in ws_names:
         await conn.execute("ALTER TABLE wheel_sessions ADD COLUMN results_sent INTEGER NOT NULL DEFAULT 1")
+    from wheel_bot.game_service import ensure_game_schema
+
+    await ensure_game_schema(conn)
     await conn.commit()
     return conn
 

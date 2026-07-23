@@ -20,6 +20,24 @@ from wheel_bot import db
 from wheel_bot.bonus_messages import format_bonus_admin_notify, format_bonus_result
 from wheel_bot.bonus_service import try_daily_bonus
 from wheel_bot.config import Settings
+from wheel_bot.game_messages import (
+    format_bowling_result,
+    format_duel_result,
+    format_games_welcome,
+    format_leaderboard,
+    format_slots_result,
+    format_user_stats,
+)
+from wheel_bot.game_service import (
+    check_cooldown,
+    format_wait,
+    get_user_rank,
+    record_play,
+    score_bowling,
+    score_slots,
+    user_week_stats,
+    weekly_summary,
+)
 from wheel_bot.stats_service import losers_summary, participant_wheel_wins, stats_summary
 
 
@@ -200,14 +218,52 @@ def _is_bonus_command(message: Message) -> bool:
     return _first_command_token(message.text) == "/bonus"
 
 
-def _bonus_user_label(message: Message) -> str:
-    user = message.from_user
+def _is_games_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/games"
+
+
+def _is_slots_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    token = _first_command_token(message.text)
+    return token in ("/slots", "/play")
+
+
+def _is_bowling_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/bowling"
+
+
+def _is_duel_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) == "/duel"
+
+
+def _games_subcommand(message: Message) -> str | None:
+    if not message.text:
+        return None
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    return parts[1].strip().lower()
+
+
+def _chat_user_label(user) -> str:
     if not user:
-        return "Участник"
+        return "Игрок"
     if user.username:
         return f"@{user.username}"
     name = (user.first_name or "").strip()
-    return name or "Участник"
+    return name or "Игрок"
+
+
+def _bonus_user_label(message: Message) -> str:
+    user = message.from_user
+    return _chat_user_label(user)
 
 
 async def _notify_superadmins_bonus_win(
@@ -313,7 +369,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 if not ok:
                     await message.answer("Не удалось отправить тест. Проверьте логи wheel-bot.")
                     return
-                mode = "актуальная новость" if post.source_mode == "news" else "исторический факт"
+                mode = "сводка мини-игр" if post.source_mode == "games" else post.source_mode
                 lines = [
                     "🧪 Тест отправлен вам (в чат статистики не ушло).",
                     f"Режим: {mode}",
@@ -394,13 +450,15 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 "Откройте приложение кнопкой ниже (не по ссылке в браузере).\n"
                 "Статистика — в общем чате: /stat или «Статистика».\n"
                 "Лузеры — /luz.\n"
-                "Бонус удачи — /bonus (раз в сутки в чате статистики).",
+                "Бонус удачи — /bonus (раз в сутки в чате статистики).\n"
+                "Мини-игры — /games help (слоты, боулинг, дуэли).",
                 reply_markup=_admin_webapp_keyboard(settings),
             )
             return
         await message.answer(
             "В общем чате: /stat или «Статистика», /luz — статистика лузеров, "
-            "/bonus — попытка удачи раз в сутки."
+            "/bonus — попытка удачи раз в сутки.\n"
+            "Мини-игры: /games help"
         )
 
     @router.message(Command("app", "webapp"))
@@ -448,7 +506,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             chat_id = int(message.chat.id)
             channel_id = cfg["channel_chat_id"]
             post_chat_id = cfg["post_chat_id"]
-            match = "✅ совпадает — /stat, /luz и /bonus здесь" if chat_id == target_id else "❌ не совпадает — /stat, /luz и /bonus здесь не сработают"
+            match = "✅ совпадает — /stat, /luz, /bonus и /games здесь" if chat_id == target_id else "❌ не совпадает — /stat, /luz, /bonus и /games здесь не сработают"
             ch_line = f"`{channel_id}`" if channel_id is not None else "не задан"
             text = (
                 f"ID этого чата: `{chat_id}`\n"
@@ -591,6 +649,274 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
     @router.message(lambda message: _is_bonus_command(message))
     async def bonus_cmd(message: Message) -> None:
         await _handle_bonus(message)
+
+    async def _require_stats_group(message: Message, command: str) -> bool:
+        """True если можно продолжать (группа + правильный chat_id)."""
+        if message.chat.type == "channel":
+            await message.answer(
+                f"Команда {command} работает в группе (супергруппе), не в канале."
+            )
+            return False
+        if message.chat.type == "private":
+            target_id = _configured_stats_chat_id()
+            await message.answer(
+                f"Команда {command} доступна в общем чате команды.\n\n"
+                f"Напишите в чате с ID {target_id}.\n\n"
+                "Если включён Group Privacy — используйте "
+                f"{command}@имя_бота или отключите Privacy Mode."
+            )
+            return False
+        target_id = _configured_stats_chat_id()
+        if await _stats_chat_mismatch_reply(message, target_id, command):
+            return False
+        return True
+
+    async def _reply_md(message: Message, text: str) -> None:
+        try:
+            await message.reply(text, parse_mode="Markdown")
+        except TelegramBadRequest:
+            await message.reply(text.replace("*", ""))
+
+    @router.message(lambda message: _is_games_command(message))
+    async def games_cmd(message: Message) -> None:
+        try:
+            if not await _require_stats_group(message, "/games"):
+                return
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            sub = _games_subcommand(message)
+            if sub in ("help", "?", "start"):
+                await _reply_md(message, format_games_welcome())
+                return
+            async with db_lock:
+                if sub in ("me", "я", "my"):
+                    data = await user_week_stats(conn, int(user.id))
+                    await _reply_md(message, format_user_stats(data))
+                    return
+                data = await weekly_summary(conn, viewer_id=int(user.id))
+            await _reply_md(message, format_leaderboard(data, viewer_id=int(user.id)))
+        except TelegramForbiddenError:
+            log.warning("games: no send permission in chat %s", message.chat.id)
+        except Exception:
+            log.exception("games handler failed")
+            try:
+                await message.answer("Ошибка /games. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
+
+    @router.message(Command("games_welcome"))
+    async def games_welcome_cmd(message: Message) -> None:
+        """Superadmin: опубликовать инструкцию по мини-играм в чат."""
+        try:
+            tg_id = message.from_user.id if message.from_user else 0
+            async with db_lock:
+                role = await db.ensure_user(conn, tg_id)
+            if role != "superadmin":
+                await message.answer("Команда только для superadmin.")
+                return
+            if message.chat.type == "private":
+                target_id = _configured_stats_chat_id()
+                await message.bot.send_message(
+                    target_id,
+                    format_games_welcome().replace("*", ""),
+                )
+                await message.answer(f"Инструкция отправлена в чат {target_id}.")
+                return
+            if not await _require_stats_group(message, "/games_welcome"):
+                return
+            await _reply_md(message, format_games_welcome())
+        except TelegramForbiddenError:
+            log.warning("games_welcome: forbidden in chat %s", message.chat.id)
+        except Exception:
+            log.exception("games_welcome failed")
+
+    @router.message(lambda message: _is_slots_command(message))
+    async def slots_cmd(message: Message) -> None:
+        try:
+            if not await _require_stats_group(message, "/slots"):
+                return
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            label = _chat_user_label(user)
+            async with db_lock:
+                wait = await check_cooldown(conn, int(user.id), "slots")
+            if wait:
+                await message.reply(f"⏳ Следующий спин через {format_wait(wait)}")
+                return
+            dice_msg = await message.answer_dice(emoji="🎰")
+            value = int(dice_msg.dice.value) if dice_msg.dice else 0
+            points, flair = score_slots(value)
+            async with db_lock:
+                await record_play(
+                    conn,
+                    telegram_id=int(user.id),
+                    user_label=label,
+                    game_type="slots",
+                    dice_value=value,
+                    points=points,
+                )
+                rank = await get_user_rank(conn, int(user.id))
+                wait = await check_cooldown(conn, int(user.id), "slots") or 0
+            text = format_slots_result(
+                label,
+                value=value,
+                points=points,
+                flair=flair,
+                rank=rank,
+                wait_seconds=wait,
+            )
+            await dice_msg.reply(text)
+        except TelegramForbiddenError:
+            log.warning("slots: forbidden in chat %s", message.chat.id)
+        except Exception:
+            log.exception("slots handler failed")
+            try:
+                await message.answer("Ошибка /slots. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_bowling_command(message))
+    async def bowling_cmd(message: Message) -> None:
+        try:
+            if not await _require_stats_group(message, "/bowling"):
+                return
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            label = _chat_user_label(user)
+            async with db_lock:
+                wait = await check_cooldown(conn, int(user.id), "bowling")
+            if wait:
+                await message.reply(f"⏳ Следующий бросок через {format_wait(wait)}")
+                return
+            dice_msg = await message.answer_dice(emoji="🎳")
+            value = int(dice_msg.dice.value) if dice_msg.dice else 0
+            points, flair = score_bowling(value)
+            async with db_lock:
+                await record_play(
+                    conn,
+                    telegram_id=int(user.id),
+                    user_label=label,
+                    game_type="bowling",
+                    dice_value=value,
+                    points=points,
+                )
+                rank = await get_user_rank(conn, int(user.id))
+                wait = await check_cooldown(conn, int(user.id), "bowling") or 0
+            text = format_bowling_result(
+                label,
+                value=value,
+                points=points,
+                flair=flair,
+                rank=rank,
+                wait_seconds=wait,
+            )
+            await dice_msg.reply(text)
+        except TelegramForbiddenError:
+            log.warning("bowling: forbidden in chat %s", message.chat.id)
+        except Exception:
+            log.exception("bowling handler failed")
+            try:
+                await message.answer("Ошибка /bowling. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
+
+    @router.message(lambda message: _is_duel_command(message))
+    async def duel_cmd(message: Message) -> None:
+        try:
+            if not await _require_stats_group(message, "/duel"):
+                return
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            reply = message.reply_to_message
+            if not reply or not reply.dice:
+                await message.reply(
+                    "⚔️ Ответьте командой /duel на сообщение с 🎲 соперника "
+                    "(он кидает кубик или вызывает вас на дуэль)."
+                )
+                return
+            if reply.dice.emoji != "🎲":
+                await message.reply("Нужно ответить на сообщение с обычным кубиком 🎲.")
+                return
+            opponent = reply.from_user
+            if not opponent or opponent.is_bot:
+                await message.reply("Дуэль только с живым игроком.")
+                return
+            if int(opponent.id) == int(user.id):
+                await message.reply("С собой дуэлиться бессмысленно 😄")
+                return
+            challenger_label = _chat_user_label(user)
+            opponent_label = _chat_user_label(opponent)
+            opponent_value = int(reply.dice.value)
+            async with db_lock:
+                wait = await check_cooldown(conn, int(user.id), "duel")
+            if wait:
+                await message.reply(f"⏳ Следующая дуэль через {format_wait(wait)}")
+                return
+            dice_msg = await message.answer_dice(emoji="🎲")
+            challenger_value = int(dice_msg.dice.value) if dice_msg.dice else 0
+            if challenger_value > opponent_value:
+                c_pts, o_pts = 25, 5
+                c_out, o_out = "win", "loss"
+                winner = "challenger"
+            elif challenger_value < opponent_value:
+                c_pts, o_pts = 5, 25
+                c_out, o_out = "loss", "win"
+                winner = "opponent"
+            else:
+                c_pts = o_pts = 12
+                c_out = o_out = "tie"
+                winner = "tie"
+            async with db_lock:
+                await record_play(
+                    conn,
+                    telegram_id=int(user.id),
+                    user_label=challenger_label,
+                    game_type="duel",
+                    dice_value=challenger_value,
+                    points=c_pts,
+                    meta={
+                        "opponent_id": int(opponent.id),
+                        "opponent_label": opponent_label,
+                        "opponent_value": opponent_value,
+                        "outcome": c_out,
+                    },
+                )
+                await record_play(
+                    conn,
+                    telegram_id=int(opponent.id),
+                    user_label=opponent_label,
+                    game_type="duel",
+                    dice_value=opponent_value,
+                    points=o_pts,
+                    meta={
+                        "opponent_id": int(user.id),
+                        "opponent_label": challenger_label,
+                        "opponent_value": challenger_value,
+                        "outcome": o_out,
+                    },
+                )
+            text = format_duel_result(
+                challenger_label=challenger_label,
+                opponent_label=opponent_label,
+                challenger_value=challenger_value,
+                opponent_value=opponent_value,
+                challenger_points=c_pts,
+                opponent_points=o_pts,
+                winner=winner,
+            )
+            await dice_msg.reply(text)
+        except TelegramForbiddenError:
+            log.warning("duel: forbidden in chat %s", message.chat.id)
+        except Exception:
+            log.exception("duel handler failed")
+            try:
+                await message.answer("Ошибка /duel. Проверьте логи wheel-bot.")
+            except Exception:
+                pass
 
     @router.message(lambda message: _is_luz_command(message))
     async def luz_cmd(message: Message) -> None:
