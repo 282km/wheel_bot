@@ -42,11 +42,8 @@ from wheel_bot.game_messages import (
     format_leaderboard,
     format_user_stats,
 )
-from wheel_bot.game_service import (
-    plain_player_label,
-    user_week_stats,
-    weekly_summary,
-)
+from wheel_bot.game_service import user_week_stats, weekly_summary
+from wheel_bot.user_labels import plain_player_label, remember_telegram_user
 from wheel_bot.stats_service import losers_summary, participant_wheel_wins, stats_summary
 
 
@@ -273,25 +270,11 @@ def _games_subcommand(message: Message) -> str | None:
     return parts[1].strip().lower()
 
 
-def _chat_user_label(user) -> str:
+async def _bonus_user_label_saved(message: Message, conn: aiosqlite.Connection) -> str:
+    user = message.from_user
     if not user:
         return "Игрок"
-    parts: list[str] = []
-    if user.first_name:
-        parts.append(str(user.first_name).strip())
-    if user.last_name:
-        parts.append(str(user.last_name).strip())
-    name = " ".join(p for p in parts if p)
-    if name:
-        return name
-    if user.username:
-        return str(user.username).lstrip("@")
-    return "Игрок"
-
-
-def _bonus_user_label(message: Message) -> str:
-    user = message.from_user
-    return _chat_user_label(user)
+    return await remember_telegram_user(conn, user)
 
 
 async def _notify_superadmins_bonus_win(
@@ -652,8 +635,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             if await _stats_chat_mismatch_reply(message, target_id, "/bonus"):
                 return
             async with db_lock:
-                result = await try_daily_bonus(conn, int(user.id), user_label=_bonus_user_label(message))
-            user_label = _bonus_user_label(message)
+                user_label = await _bonus_user_label_saved(message, conn)
+                result = await try_daily_bonus(conn, int(user.id), user_label=user_label)
             text = format_bonus_result(user_label, result)
             try:
                 await message.reply(text, parse_mode="Markdown")
@@ -946,6 +929,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             user = message.from_user
             if not user or user.is_bot:
                 return
+            async with db_lock:
+                await remember_telegram_user(conn, user)
             sub = _games_subcommand(message)
             if sub in ("help", "?", "start"):
                 await _reply_md(message, format_games_welcome())
@@ -1008,9 +993,10 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             user = message.from_user
             if not user or user.is_bot:
                 return
-            label = _chat_user_label(user)
             uid = int(user.id)
             chat_id = int(message.chat.id)
+            async with db_lock:
+                label = await remember_telegram_user(conn, user)
             await _cleanup_blackjack_messages(message.bot, uid, chat_id)
             async with db_lock:
                 err, view = await start_blackjack(
@@ -1044,9 +1030,9 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             user = message.from_user
             if not user or user.is_bot:
                 return
-            label = _chat_user_label(user)
             uid = int(user.id)
             async with db_lock:
+                label = await remember_telegram_user(conn, user)
                 session = await get_session(conn, uid)
                 board_mid = session.message_id if session else None
                 err, view = await hit_blackjack(
@@ -1087,9 +1073,9 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             user = message.from_user
             if not user or user.is_bot:
                 return
-            label = _chat_user_label(user)
             uid = int(user.id)
             async with db_lock:
+                label = await remember_telegram_user(conn, user)
                 session = await get_session(conn, uid)
                 board_mid = session.message_id if session else None
                 err, view = await stand_blackjack(
@@ -1160,8 +1146,8 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 await cb.answer("Кнопки работают только в чате статистики.", show_alert=True)
                 return
 
-            label = _chat_user_label(user)
             async with db_lock:
+                label = await remember_telegram_user(conn, user)
                 session = await get_session(conn, owner_id)
                 if session is None:
                     await cb.answer("Партия уже завершена.", show_alert=True)

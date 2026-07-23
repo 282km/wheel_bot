@@ -8,14 +8,9 @@ import aiosqlite
 
 from wheel_bot.db import utc_now_iso
 from wheel_bot.timezones import get_timezone
+from wheel_bot.user_labels import plain_player_label, resolve_player_label
 
 GameType = Literal["blackjack"]
-
-
-def plain_player_label(label: str, *, default: str = "Игрок") -> str:
-    """Имя без @ — чтобы в групповой статистике не слать mention-уведомления."""
-    s = str(label or "").strip() or default
-    return s[1:] if s.startswith("@") else s
 
 
 GAME_SCHEMA = """
@@ -160,19 +155,35 @@ async def weekly_summary(
     top_limit: int = 10,
 ) -> dict[str, Any]:
     week_start, week_end, period_label = week_bounds(when)
-    params = (week_start.isoformat(), week_end.isoformat())
+    params = (
+        week_start.isoformat(),
+        week_end.isoformat(),
+        week_start.isoformat(),
+        week_end.isoformat(),
+    )
 
     cur = await conn.execute(
         f"""
         SELECT
-            telegram_id,
-            COALESCE(NULLIF(MAX(user_label), ''), 'Игрок') AS label,
-            SUM(points) AS points,
+            g.telegram_id,
+            COALESCE(
+                NULLIF(u.display_name, ''),
+                (
+                    SELECT gp2.user_label FROM game_plays gp2
+                    WHERE gp2.telegram_id = g.telegram_id
+                      AND datetime(gp2.played_at) >= datetime(?) AND datetime(gp2.played_at) < datetime(?)
+                    ORDER BY gp2.played_at DESC
+                    LIMIT 1
+                ),
+                'Игрок'
+            ) AS label,
+            SUM(g.points) AS points,
             COUNT(*) AS games
-        FROM game_plays
-        WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
-          AND game_type = 'blackjack'
-        GROUP BY telegram_id
+        FROM game_plays g
+        LEFT JOIN users u ON u.telegram_id = g.telegram_id
+        WHERE datetime(g.played_at) >= datetime(?) AND datetime(g.played_at) < datetime(?)
+          AND g.game_type = 'blackjack'
+        GROUP BY g.telegram_id
         ORDER BY points DESC, games DESC, label COLLATE NOCASE ASC
         LIMIT {int(top_limit)}
         """,
@@ -236,7 +247,6 @@ async def user_week_stats(
         await conn.execute(
             """
             SELECT
-                COALESCE(NULLIF(MAX(user_label), ''), 'Игрок') AS label,
                 SUM(points) AS total_points,
                 COUNT(*) AS games,
                 SUM(CASE WHEN points = 70 THEN 1 ELSE 0 END) AS naturals
@@ -248,7 +258,7 @@ async def user_week_stats(
         )
     ).fetchone()
 
-    label = plain_player_label(str(row["label"]) if row and row["label"] else "")
+    label = await resolve_player_label(conn, int(telegram_id))
     week = {
         "total_points": int(row["total_points"] or 0) if row else 0,
         "games": int(row["games"] or 0) if row else 0,

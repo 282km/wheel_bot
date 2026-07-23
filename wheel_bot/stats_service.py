@@ -5,7 +5,7 @@ from typing import Any, Optional
 import aiosqlite
 
 from wheel_bot.periods import PeriodKey, resolve_period
-from wheel_bot.game_service import plain_player_label
+from wheel_bot.user_labels import resolve_player_label
 
 
 def _label(nick: str, desc: Optional[str]) -> str:
@@ -133,26 +133,29 @@ async def _top_bonus_winners(
     """Кто поймал /bonus за период: только с хотя бы одним выигрышем."""
     sql = f"""
     SELECT
-        telegram_id,
-        COALESCE(NULLIF(MAX(user_label), ''), 'Участник') AS label,
+        bw.telegram_id,
         COUNT(*) AS wins,
-        SUM(amount) AS total
-    FROM bonus_wins
+        SUM(bw.amount) AS total
+    FROM bonus_wins bw
     WHERE 1=1{date_clause}
-    GROUP BY telegram_id
+    GROUP BY bw.telegram_id
     HAVING wins > 0
-    ORDER BY wins DESC, total DESC, label COLLATE NOCASE ASC
+    ORDER BY wins DESC, total DESC
     """
     cur = await conn.execute(sql, params_date)
     rows = await cur.fetchall()
-    return [
-        {
-            "label": plain_player_label(str(r["label"]), default="Участник"),
-            "wins": int(r["wins"]),
-            "total": float(r["total"]),
-        }
-        for r in rows
-    ]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        label = await resolve_player_label(conn, int(r["telegram_id"]), fallback="Участник")
+        out.append(
+            {
+                "label": label,
+                "wins": int(r["wins"]),
+                "total": float(r["total"]),
+            }
+        )
+    out.sort(key=lambda x: (-x["wins"], -x["total"], x["label"].casefold()))
+    return out
 
 
 async def _total_prizes_sum(conn: aiosqlite.Connection, chat_id: int, date_clause: str, params_date: list[Any]) -> float:

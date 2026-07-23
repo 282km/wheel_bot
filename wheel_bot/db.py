@@ -111,6 +111,10 @@ async def connect(db_path: Path) -> aiosqlite.Connection:
         await conn.execute("ALTER TABLE wheel_sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal'")
     if "results_sent" not in ws_names:
         await conn.execute("ALTER TABLE wheel_sessions ADD COLUMN results_sent INTEGER NOT NULL DEFAULT 1")
+    user_cols = await (await conn.execute("PRAGMA table_info(users)")).fetchall()
+    user_names = {str(r["name"]) for r in user_cols}
+    if "display_name" not in user_names:
+        await conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
     from wheel_bot.game_service import ensure_game_schema
 
     await ensure_game_schema(conn)
@@ -144,6 +148,22 @@ async def ensure_user(conn: aiosqlite.Connection, telegram_id: int, role: Option
     )
     await conn.commit()
     return r
+
+
+async def upsert_user_display_name(
+    conn: aiosqlite.Connection,
+    telegram_id: int,
+    display_name: str,
+) -> None:
+    name = str(display_name or "").strip()
+    if not name:
+        return
+    await ensure_user(conn, int(telegram_id))
+    await conn.execute(
+        "UPDATE users SET display_name = ? WHERE telegram_id = ?",
+        (name, int(telegram_id)),
+    )
+    await conn.commit()
 
 
 async def get_role(conn: aiosqlite.Connection, telegram_id: int) -> Optional[str]:

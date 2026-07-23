@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from wheel_bot.game_service import plain_player_label
+from wheel_bot.user_labels import plain_player_label
 
 
 def format_games_welcome() -> str:
