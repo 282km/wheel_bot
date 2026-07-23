@@ -295,6 +295,12 @@ def _is_chatid_command(message: Message) -> bool:
     return _first_command_token(message.text) == "/chatid"
 
 
+def _is_delete_reply_command(message: Message) -> bool:
+    if not message.text:
+        return False
+    return _first_command_token(message.text) in ("/удоли", "/удали")
+
+
 def _is_bonus_command(message: Message) -> bool:
     if not message.text:
         return False
@@ -660,6 +666,42 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             log.warning("chatid: no send permission in chat %s", message.chat.id)
         except Exception:
             log.exception("chatid handler failed")
+
+    @router.message(lambda message: _is_delete_reply_command(message))
+    async def delete_reply_cmd(message: Message) -> None:
+        """Ответом на сообщение — удалить его (admin/superadmin)."""
+        try:
+            user = message.from_user
+            if not user or user.is_bot:
+                return
+            async with db_lock:
+                role = await db.ensure_user(conn, int(user.id))
+            if role not in ("admin", "superadmin"):
+                await message.reply("Команда /удоли только для админов бота.")
+                return
+            if not message.reply_to_message:
+                await message.reply("Ответьте на сообщение, которое нужно удалить.")
+                return
+
+            chat_id = int(message.chat.id)
+            target_id = int(message.reply_to_message.message_id)
+            try:
+                await message.bot.delete_message(chat_id=chat_id, message_id=target_id)
+            except TelegramBadRequest:
+                await message.reply(
+                    "Не удалось удалить сообщение. "
+                    "Проверьте, что бот — админ с правом удалять сообщения, "
+                    "и что сообщение не старше 48 часов."
+                )
+                return
+            try:
+                await message.bot.delete_message(chat_id=chat_id, message_id=int(message.message_id))
+            except TelegramBadRequest:
+                pass
+        except TelegramForbiddenError:
+            log.warning("delete_reply: no permission in chat %s", message.chat.id)
+        except Exception:
+            log.exception("delete_reply handler failed")
 
     async def _handle_stat(message: Message) -> None:
         try:
