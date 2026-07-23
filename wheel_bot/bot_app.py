@@ -39,7 +39,7 @@ from wheel_bot.dogslot_service import (
     get_session as get_dogslot_session,
     get_ui_state as get_dogslot_ui_state,
     save_ui_state as save_dogslot_ui_state,
-    set_board_message_id as set_dogslot_board_message_id,
+    sync_board_message_id as sync_dogslot_board_message_id,
     spin_dogslot,
 )
 from wheel_bot.mines_service import (
@@ -1148,6 +1148,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                     command_message_id=cmd_mid,
                 ),
             )
+            await sync_dogslot_board_message_id(conn, int(telegram_id), int(board_message_id))
 
     async def _send_dogslot_view(
         message: Message,
@@ -1162,46 +1163,52 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
         chat_id = int(message.chat.id)
         result_id: int | None = board_message_id
 
+        async def _apply_edit(target_message_id: int, *, plain: bool) -> None:
+            nonlocal result_id
+            body = text.replace("*", "") if plain else text
+            await message.bot.edit_message_text(
+                body,
+                chat_id=chat_id,
+                message_id=target_message_id,
+                parse_mode=None if plain else "Markdown",
+                reply_markup=markup,
+            )
+            result_id = target_message_id
+
         try:
             if edit_message is not None:
                 await edit_message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
                 result_id = int(edit_message.message_id)
             elif board_message_id is not None:
-                await message.bot.edit_message_text(
-                    text,
-                    chat_id=chat_id,
-                    message_id=board_message_id,
-                    parse_mode="Markdown",
-                    reply_markup=markup,
-                )
-                result_id = board_message_id
+                await _apply_edit(board_message_id, plain=False)
             else:
                 sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
                 result_id = int(sent.message_id)
-                async with db_lock:
-                    session = await get_dogslot_session(conn, owner_id)
-                    if session is not None:
-                        await set_dogslot_board_message_id(conn, owner_id, result_id)
-        except TelegramBadRequest:
-            plain = text.replace("*", "")
-            try:
-                if edit_message is not None:
-                    await edit_message.edit_text(plain, reply_markup=markup)
-                    result_id = int(edit_message.message_id)
-                elif board_message_id is not None:
-                    await message.bot.edit_message_text(
-                        plain,
-                        chat_id=chat_id,
-                        message_id=board_message_id,
-                        reply_markup=markup,
-                    )
-                    result_id = board_message_id
-                else:
-                    sent = await message.answer(plain, reply_markup=markup)
-                    result_id = int(sent.message_id)
-            except TelegramBadRequest:
-                sent = await message.answer(plain, reply_markup=markup)
-                result_id = int(sent.message_id)
+        except TelegramBadRequest as exc:
+            err = str(exc).lower()
+            if edit_message is not None and "message is not modified" in err:
+                result_id = int(edit_message.message_id)
+            elif board_message_id is not None and "message is not modified" in err:
+                result_id = board_message_id
+            else:
+                plain = text.replace("*", "")
+                try:
+                    if edit_message is not None:
+                        await edit_message.edit_text(plain, reply_markup=markup)
+                        result_id = int(edit_message.message_id)
+                    elif board_message_id is not None:
+                        await _apply_edit(board_message_id, plain=True)
+                    else:
+                        sent = await message.answer(plain, reply_markup=markup)
+                        result_id = int(sent.message_id)
+                except TelegramBadRequest as exc2:
+                    if edit_message is not None and "message is not modified" in str(exc2).lower():
+                        result_id = int(edit_message.message_id)
+                    elif board_message_id is not None and "message is not modified" in str(exc2).lower():
+                        result_id = board_message_id
+                    else:
+                        sent = await message.answer(plain, reply_markup=markup)
+                        result_id = int(sent.message_id)
 
         if result_id is not None:
             await _remember_dogslot_board(owner_id, chat_id, result_id)
@@ -1762,9 +1769,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
             chat_id = int(message.chat.id)
             async with db_lock:
                 label = await remember_telegram_user(conn, user)
-                session = await get_dogslot_session(conn, uid)
-            if session is None:
-                await _cleanup_dogslot_messages(message.bot, uid, chat_id)
+            await _cleanup_dogslot_messages(message.bot, uid, chat_id)
             async with db_lock:
                 err, view = await spin_dogslot(
                     conn,
@@ -1777,8 +1782,7 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 return
             if view:
                 await _send_dogslot_view(message, view, owner_id=uid)
-                if session is None:
-                    await _remember_dogslot_command(uid, chat_id, int(message.message_id))
+                await _remember_dogslot_command(uid, chat_id, int(message.message_id))
         except TelegramForbiddenError:
             log.warning("dogslot: forbidden in chat %s", message.chat.id)
         except Exception:
@@ -1828,22 +1832,11 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 await cb.answer("Кнопки работают только в чате статистики.", show_alert=True)
                 return
 
+            await cb.answer()
+
             action_map = {"s": "spin", "p": "pick", "f": "free_spin"}
             async with db_lock:
                 label = await remember_telegram_user(conn, user)
-                session = await get_dogslot_session(conn, owner_id)
-                ui = await get_dogslot_ui_state(conn, owner_id)
-                expected_board = None
-                if session and session.message_id:
-                    expected_board = int(session.message_id)
-                elif ui and ui.board_message_id:
-                    expected_board = int(ui.board_message_id)
-                if expected_board is not None and cb.message.message_id != expected_board:
-                    await cb.answer(
-                        "Это старое поле. Используйте актуальное сообщение своего слота.",
-                        show_alert=True,
-                    )
-                    return
                 err, view = await dogslot_action(
                     conn,
                     telegram_id=owner_id,
@@ -1853,18 +1846,29 @@ def setup_router(settings: Settings, conn: aiosqlite.Connection, db_lock: asynci
                 )
 
             if err:
-                await cb.answer(err.replace("`", "").replace("*", ""), show_alert=True)
+                try:
+                    await cb.message.answer(err.replace("`", "").replace("*", ""))
+                except Exception:
+                    pass
                 return
             if not view:
-                await cb.answer()
                 return
-            await cb.answer()
-            await _send_dogslot_view(
-                cb.message,
-                view,
-                owner_id=owner_id,
-                edit_message=cb.message,
-            )
+            try:
+                await _send_dogslot_view(
+                    cb.message,
+                    view,
+                    owner_id=owner_id,
+                    edit_message=cb.message,
+                )
+            except Exception:
+                log.exception("dogslot view update failed")
+                try:
+                    await cb.message.answer(
+                        view.text.replace("*", ""),
+                        reply_markup=_dogslot_keyboard(view, owner_id),
+                    )
+                except Exception:
+                    log.exception("dogslot view fallback failed")
         except TelegramForbiddenError:
             log.warning("dogslot callback: forbidden in chat %s", cb.message.chat.id if cb.message else "?")
             await cb.answer()

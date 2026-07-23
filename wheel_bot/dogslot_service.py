@@ -273,6 +273,20 @@ async def set_board_message_id(conn: aiosqlite.Connection, telegram_id: int, mes
     await conn.commit()
 
 
+async def sync_board_message_id(
+    conn: aiosqlite.Connection,
+    telegram_id: int,
+    message_id: int,
+) -> None:
+    """Keep session board id in sync with the visible Telegram message."""
+    session = await get_session(conn, telegram_id)
+    if session is None:
+        return
+    if session.message_id == int(message_id):
+        return
+    await set_board_message_id(conn, telegram_id, message_id)
+
+
 async def clear_session(conn: aiosqlite.Connection, telegram_id: int) -> None:
     await conn.execute("DELETE FROM dogslot_sessions WHERE telegram_id = ?", (int(telegram_id),))
     await conn.commit()
@@ -690,6 +704,13 @@ async def dogslot_action(
     chat_id: int,
     action: Literal["spin", "pick", "free_spin"],
 ) -> tuple[Optional[str], Optional[DogslotView]]:
+    session = await get_session(conn, telegram_id)
+    if session is not None:
+        if session.phase == "bonus_pick" and action == "spin":
+            action = "pick"
+        elif session.phase == "free_spins" and action in ("spin", "pick"):
+            action = "free_spin"
+
     if action == "pick":
         return await run_bonus_pick(conn, telegram_id=telegram_id, user_label=user_label)
     if action == "free_spin":
