@@ -155,12 +155,8 @@ async def weekly_summary(
     top_limit: int = 10,
 ) -> dict[str, Any]:
     week_start, week_end, period_label = week_bounds(when)
-    params = (
-        week_start.isoformat(),
-        week_end.isoformat(),
-        week_start.isoformat(),
-        week_end.isoformat(),
-    )
+    week_params = (week_start.isoformat(), week_end.isoformat())
+    top_params = (*week_params, *week_params)
 
     cur = await conn.execute(
         f"""
@@ -187,7 +183,7 @@ async def weekly_summary(
         ORDER BY points DESC, games DESC, label COLLATE NOCASE ASC
         LIMIT {int(top_limit)}
         """,
-        params,
+        top_params,
     )
     top = [
         {
@@ -211,7 +207,7 @@ async def weekly_summary(
             WHERE datetime(played_at) >= datetime(?) AND datetime(played_at) < datetime(?)
               AND game_type = 'blackjack'
             """,
-            params,
+            week_params,
         )
     ).fetchone()
 
