@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 import aiosqlite
@@ -46,7 +45,6 @@ PAYLINES: tuple[tuple[tuple[int, int], ...], ...] = (
     tuple((2, c) for c in range(COLS)),
 )
 
-DOGSLOT_COOLDOWN = timedelta(minutes=10)
 MAX_BONUS_POINTS = 500
 
 DOGSLOT_SCHEMA = """
@@ -126,21 +124,6 @@ class DogslotView:
     action: Literal["spin", "pick", "free_spin", "none"]
     can_act: bool
     wait_seconds: int = 0
-
-
-def format_wait(seconds: int) -> str:
-    seconds = max(0, int(seconds))
-    hours, rem = divmod(seconds, 3600)
-    minutes, secs = divmod(rem, 60)
-    if hours and minutes:
-        return f"{hours} ч {minutes} мин"
-    if hours:
-        return f"{hours} ч"
-    if minutes:
-        return f"{minutes} мин"
-    if secs:
-        return f"{secs} сек"
-    return "меньше минуты"
 
 
 async def ensure_dogslot_schema(conn: aiosqlite.Connection) -> None:
@@ -295,41 +278,6 @@ async def clear_session(conn: aiosqlite.Connection, telegram_id: int) -> None:
     await conn.commit()
 
 
-async def _last_play_at(conn: aiosqlite.Connection, telegram_id: int) -> Optional[datetime]:
-    row = await (
-        await conn.execute(
-            """
-            SELECT played_at FROM game_plays
-            WHERE telegram_id = ? AND game_type = 'dogslot'
-            ORDER BY played_at DESC LIMIT 1
-            """,
-            (int(telegram_id),),
-        )
-    ).fetchone()
-    if not row:
-        return None
-    return datetime.fromisoformat(str(row["played_at"])).astimezone(timezone.utc)
-
-
-async def check_cooldown(
-    conn: aiosqlite.Connection,
-    telegram_id: int,
-    *,
-    now: Optional[datetime] = None,
-) -> Optional[int]:
-    session = await get_session(conn, telegram_id)
-    if session is not None:
-        return None
-    ref = now or datetime.now(timezone.utc)
-    last = await _last_play_at(conn, telegram_id)
-    if last is None:
-        return None
-    elapsed = ref - last
-    if elapsed >= DOGSLOT_COOLDOWN:
-        return None
-    return max(1, int((DOGSLOT_COOLDOWN - elapsed).total_seconds()))
-
-
 def _rng() -> secrets.SystemRandom:
     return secrets.SystemRandom()
 
@@ -477,9 +425,7 @@ def _build_view(
     body.extend(lines)
     if rank is not None:
         body.extend(["", f"🏆 Место в недельном топе: {rank}-е"])
-    if wait_seconds > 0:
-        body.append(f"⏳ Следующий спин через {format_wait(wait_seconds)}")
-    elif can_act:
+    if can_act:
         body.extend(["", "👆 Кнопка ниже — только для вас"])
     body.extend(["", "📊 Топ: `/games`"])
     return DogslotView(
@@ -514,7 +460,6 @@ async def _finish_bonus(
     )
     rank = await get_user_rank(conn, session.telegram_id)
     await clear_session(conn, session.telegram_id)
-    wait = await check_cooldown(conn, session.telegram_id) or 0
     lines = [
         "🎉 *Бонус завершён!*",
         "",
@@ -529,9 +474,8 @@ async def _finish_bonus(
         None,
         user_label,
         lines=lines,
-        action="none",
-        can_act=wait <= 0,
-        wait_seconds=wait,
+        action="spin",
+        can_act=True,
         rank=rank,
     )
 
@@ -692,10 +636,6 @@ async def spin_dogslot(
                 can_act=True,
             )
 
-    wait = await check_cooldown(conn, telegram_id)
-    if wait:
-        return f"⏳ Следующий спин через {format_wait(wait)}", None
-
     rng = _rng()
     grid = _generate_grid(rng)
     base_points, notes = _score_grid(grid)
@@ -722,7 +662,6 @@ async def spin_dogslot(
         meta={"mode": "base", "notes": notes},
     )
     rank = await get_user_rank(conn, telegram_id)
-    next_wait = await check_cooldown(conn, telegram_id) or 0
 
     lines = [
         _format_grid(grid),
@@ -738,8 +677,7 @@ async def spin_dogslot(
         user_label,
         lines=lines,
         action="spin",
-        can_act=next_wait <= 0,
-        wait_seconds=next_wait,
+        can_act=True,
         rank=rank,
     )
 
