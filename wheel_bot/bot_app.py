@@ -43,6 +43,7 @@ from wheel_bot.game_messages import (
     format_user_stats,
 )
 from wheel_bot.game_service import (
+    plain_player_label,
     user_week_stats,
     weekly_summary,
 )
@@ -135,7 +136,7 @@ def _format_stats_block(data: dict[str, Any]) -> str:
         for i, row in enumerate(top_bonus, start=1):
             wins = int(row["wins"])
             lines.append(f"{i} место")
-            lines.append(f"👤 {row['label']}")
+            lines.append(f"👤 {plain_player_label(str(row['label']), default='Участник')}")
             lines.append(f"🎯 Выигрышей: {wins}")
             lines.append(f"💰 На сумму: {_fmt_money(float(row['total']))}")
             lines.append("")
@@ -276,7 +277,7 @@ def _chat_user_label(user) -> str:
     if not user:
         return "Игрок"
     if user.username:
-        return f"@{user.username}"
+        return str(user.username).lstrip("@")
     name = (user.first_name or "").strip()
     return name or "Игрок"
 

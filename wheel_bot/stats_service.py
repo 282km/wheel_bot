@@ -5,6 +5,7 @@ from typing import Any, Optional
 import aiosqlite
 
 from wheel_bot.periods import PeriodKey, resolve_period
+from wheel_bot.game_service import plain_player_label
 
 
 def _label(nick: str, desc: Optional[str]) -> str:
@@ -146,7 +147,7 @@ async def _top_bonus_winners(
     rows = await cur.fetchall()
     return [
         {
-            "label": str(r["label"]),
+            "label": plain_player_label(str(r["label"]), default="Участник"),
             "wins": int(r["wins"]),
             "total": float(r["total"]),
         }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from wheel_bot.game_service import plain_player_label
 
 
 def format_games_welcome() -> str:
@@ -43,7 +43,7 @@ def format_leaderboard(data: dict[str, Any], *, viewer_id: Optional[int] = None)
         medals = ("🥇", "🥈", "🥉")
         for i, row in enumerate(rows[:10], start=1):
             medal = medals[i - 1] if i <= 3 else f"{i}."
-            label = str(row.get("label") or "Игрок")
+            label = plain_player_label(str(row.get("label") or ""))
             total = int(row.get("points") or 0)
             games = int(row.get("games") or 0)
             lines.append(f"{medal} {label} — {total} очков ({games} игр)")
@@ -72,7 +72,7 @@ def format_leaderboard(data: dict[str, Any], *, viewer_id: Optional[int] = None)
 
 
 def format_user_stats(data: dict[str, Any]) -> str:
-    label = str(data.get("label") or "Игрок")
+    label = plain_player_label(str(data.get("label") or ""))
     week = data.get("week") or {}
     lines = [
         f"📈 *{label}* — блэкджек",

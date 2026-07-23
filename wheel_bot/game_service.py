@@ -11,6 +11,13 @@ from wheel_bot.timezones import get_timezone
 
 GameType = Literal["blackjack"]
 
+
+def plain_player_label(label: str, *, default: str = "Игрок") -> str:
+    """Имя без @ — чтобы в групповой статистике не слать mention-уведомления."""
+    s = str(label or "").strip() or default
+    return s[1:] if s.startswith("@") else s
+
+
 GAME_SCHEMA = """
 CREATE TABLE IF NOT EXISTS game_plays (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,7 +181,7 @@ async def weekly_summary(
     top = [
         {
             "telegram_id": int(r["telegram_id"]),
-            "label": str(r["label"]),
+            "label": plain_player_label(str(r["label"])),
             "points": int(r["points"]),
             "games": int(r["games"]),
         }
@@ -241,7 +248,7 @@ async def user_week_stats(
         )
     ).fetchone()
 
-    label = str(row["label"]) if row and row["label"] else "Игрок"
+    label = plain_player_label(str(row["label"]) if row and row["label"] else "")
     week = {
         "total_points": int(row["total_points"] or 0) if row else 0,
         "games": int(row["games"] or 0) if row else 0,
